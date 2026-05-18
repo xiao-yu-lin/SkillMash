@@ -90,7 +90,12 @@ skillmash/
     examples.py      sample registry for demos and tests
 docs/
   skill-orchestration-system-design.md
-  skill-orchestration-n-plus-one-views.md
+  modules/
+    offline-representation-extraction.md
+    offline-graph-construction.md
+    online-orchestration-retrieval.md
+    online-pruning-ranking.md
+    online-execution.md
 tests/
   test_core.py
 ```

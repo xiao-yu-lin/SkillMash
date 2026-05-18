@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from skillmash.representation import (
@@ -24,6 +25,23 @@ def test_scanner_finds_skill_folders_in_stable_order(tmp_path: Path) -> None:
     folders = SkillFolderScanner().scan(tmp_path)
 
     assert [folder.relative_path for folder in folders] == ["a-skill", "b-skill"]
+
+
+def test_scanner_can_limit_depth_when_called_directly(tmp_path: Path) -> None:
+    (tmp_path / "top").mkdir()
+    (tmp_path / "top" / "SKILL.md").write_text("# Top", encoding="utf-8")
+    (tmp_path / "category" / "nested").mkdir(parents=True)
+    (tmp_path / "category" / "nested" / "SKILL.md").write_text("# Nested", encoding="utf-8")
+
+    scanner = SkillFolderScanner()
+
+    assert [folder.relative_path for folder in scanner.scan(tmp_path)] == [
+        "category/nested",
+        "top",
+    ]
+    assert [folder.relative_path for folder in scanner.scan(tmp_path, max_depth=1)] == [
+        "top",
+    ]
 
 
 def test_manifest_parser_splits_frontmatter_and_body(tmp_path: Path) -> None:
@@ -77,8 +95,20 @@ def test_normalizer_normalizes_input_and_output_names_and_types(tmp_path: Path) 
     assert representation.id == "aris-arxiv"
     assert representation.inputs[0].name == "query_or_arxiv_id"
     assert representation.inputs[0].type == "text"
+    assert representation.inputs[0].format is None
+    assert representation.inputs[0].raw == {
+        "name": "Query or Arxiv ID",
+        "type": "natural language query",
+    }
+    assert representation.inputs[0].normalization["type_method"] == "alias_map"
     assert representation.outputs[0].name == "downloaded_pdf"
     assert representation.outputs[0].type == "paper"
+    assert representation.outputs[0].format == "pdf"
+    assert representation.outputs[0].raw == {
+        "name": "Downloaded PDF",
+        "type": "pdf",
+    }
+    assert representation.outputs[0].normalization["raw_type"] == "pdf"
     assert representation.skill_tags == ["paper", "search", "summarize"]
     assert representation.data_tags == ["pdf", "writing"]
     assert representation.quality["extraction_confidence"] == 0.86
@@ -95,6 +125,8 @@ def test_normalizer_creates_defaults_and_diagnostics(tmp_path: Path) -> None:
     assert result.representation.inputs[0].type == "text"
     assert result.representation.outputs[0].name == "result"
     assert result.representation.outputs[0].type == "unknown"
+    assert result.representation.inputs[0].raw["name"] == "input"
+    assert result.representation.outputs[0].normalization["type_method"] == "default_unknown"
     assert {diagnostic.code for diagnostic in result.diagnostics} == {
         "default_input_created",
         "unknown_output_created",
@@ -157,6 +189,34 @@ def test_representation_extractor_accepts_pluggable_schema_extractor(tmp_path: P
     assert representation.inputs[0].name == "research_topic"
     assert representation.outputs[0].name == "short_summary"
     assert result.diagnostics == []
+
+
+def test_representation_extractor_keeps_scan_order_with_workers(tmp_path: Path) -> None:
+    for name in ["a-skill", "b-skill", "c-skill"]:
+        skill_dir = tmp_path / name
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\n---\n# {name}\n",
+            encoding="utf-8",
+        )
+
+    class SlowSchemaExtractor:
+        def extract(self, manifest):
+            if manifest.folder.relative_path == "a-skill":
+                time.sleep(0.03)
+            return ExtractedSkillSchema(
+                description="Create a short summary.",
+                inputs=[{"name": "Research Topic", "type": "text"}],
+                outputs=[{"name": "Short Summary", "type": "summary"}],
+            )
+
+    result = RepresentationExtractor(SlowSchemaExtractor(), max_workers=3).extract_all(tmp_path)
+
+    assert [representation.id for representation in result.representations] == [
+        "a-skill",
+        "b-skill",
+        "c-skill",
+    ]
 
 
 def _manifest(tmp_path: Path):

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -75,55 +73,64 @@ class OpenAICompatibleSchemaExtractor:
 
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
+        self.client = _create_openai_client(config)
 
     def extract(self, manifest: RawSkillManifest) -> ExtractedSkillSchema:
-        payload = {
-            "model": self.config.model,
-            "temperature": self.config.temperature,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": _SYSTEM_PROMPT,
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        _build_llm_context(manifest),
-                        ensure_ascii=False,
-                        indent=2,
-                    ),
-                },
-            ],
-            "response_format": {"type": "json_object"},
-        }
-        response = self._post_chat_completions(payload)
-        content = response["choices"][0]["message"]["content"]
-        return schema_from_llm_payload(json.loads(content))
-
-    def _post_chat_completions(self, payload: dict[str, Any]) -> dict[str, Any]:
-        request = urllib.request.Request(
-            url=f"{self.config.base_url}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.config.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(
-                request,
-                timeout=self.config.timeout_seconds,
-            ) as response:
-                body = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            error_body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"LLM request failed with HTTP {exc.code}: {error_body}"
-            ) from exc
-        except urllib.error.URLError as exc:
+            response = self.client.chat.completions.create(
+                model=self.config.model,
+                temperature=self.config.temperature,
+                response_format={"type": "json_object"},
+                messages=[
+                    {
+                        "role": "system",
+                        "content": _SYSTEM_PROMPT,
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            _build_llm_context(manifest),
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                    },
+                ],
+            )
+        except Exception as exc:
             raise RuntimeError(f"LLM request failed: {exc}") from exc
-        return json.loads(body)
+
+        choice = response.choices[0]
+        content = _extract_message_content(choice.message)
+        if not content:
+            raise RuntimeError(
+                "LLM response content is empty. "
+                f"finish_reason={getattr(choice, 'finish_reason', None)!r}; "
+                f"message={_safe_model_dump(choice.message)}"
+            )
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "LLM response is not valid JSON. "
+                f"content_prefix={content[:1000]!r}"
+            ) from exc
+        return schema_from_llm_payload(payload)
+
+
+def _create_openai_client(config: LLMConfig):
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError(
+            "The openai package is required for LLM extraction. "
+            "Install dependencies with `uv sync` or `pip install openai`."
+        ) from exc
+
+    return OpenAI(
+        api_key=config.api_key,
+        base_url=config.base_url,
+        timeout=config.timeout_seconds,
+    )
 
 
 def schema_from_llm_payload(payload: dict[str, Any]) -> ExtractedSkillSchema:
@@ -143,6 +150,52 @@ def schema_from_llm_payload(payload: dict[str, Any]) -> ExtractedSkillSchema:
     )
 
 
+def _extract_message_content(message: Any) -> str:
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content.strip()
+
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+            else:
+                text = getattr(item, "text", None) or getattr(item, "content", None)
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts).strip()
+
+    for attr in ("parsed", "json", "output_text"):
+        value = getattr(message, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            return json.dumps(value, ensure_ascii=False)
+
+    return ""
+
+
+def _safe_model_dump(value: Any) -> str:
+    try:
+        if hasattr(value, "model_dump"):
+            data = value.model_dump()
+        elif hasattr(value, "to_dict"):
+            data = value.to_dict()
+        elif hasattr(value, "__dict__"):
+            data = dict(value.__dict__)
+        else:
+            data = repr(value)
+        text = json.dumps(data, ensure_ascii=False, default=str)
+    except Exception:
+        text = repr(value)
+    return text[:2000]
+
+
 def _parameter_from_payload(payload: dict[str, Any]) -> ParameterSpec:
     return ParameterSpec(
         name=str(payload.get("name") or "input"),
@@ -150,6 +203,8 @@ def _parameter_from_payload(payload: dict[str, Any]) -> ParameterSpec:
         required=bool(payload.get("required", True)),
         description=str(payload.get("description") or ""),
         default=payload.get("default"),
+        format=payload.get("format"),
+        schema_ref=payload.get("schema_ref"),
     )
 
 
@@ -158,6 +213,8 @@ def _artifact_from_payload(payload: dict[str, Any]) -> ArtifactSpec:
         name=str(payload.get("name") or "result"),
         type=str(payload.get("type") or "unknown"),
         description=str(payload.get("description") or ""),
+        format=payload.get("format"),
+        schema_ref=payload.get("schema_ref"),
     )
 
 
@@ -195,8 +252,8 @@ Return JSON only. Do not include markdown.
 
 Required JSON object fields:
 - description: concise string
-- inputs: array of {name, type, required, description}
-- outputs: array of {name, type, description}
+- inputs: array of {name, type, required, description, optional format, optional schema_ref}
+- outputs: array of {name, type, description, optional format, optional schema_ref}
 - skill_tags: array of short capability tags
 - data_tags: array of short data/artifact tags
 - constraints: array of strings
@@ -206,6 +263,9 @@ Required JSON object fields:
 Use semantic artifact types for inputs and outputs. Prefer:
 text, url, file, path, paper, dataset, image, audio, video, table, code,
 json, report, summary, diagram, pptx, unknown.
+
+Use format for concrete encodings such as pdf, csv, markdown, json, png, jpg,
+svg, pptx. For example, a PDF paper should use type=paper and format=pdf.
 
 If unsure, use unknown and add a warning.
 """

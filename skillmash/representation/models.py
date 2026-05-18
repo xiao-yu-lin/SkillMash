@@ -61,6 +61,10 @@ class ParameterSpec:
     required: bool = True
     description: str = ""
     default: Any = None
+    format: str | None = None
+    schema_ref: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+    normalization: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -69,6 +73,10 @@ class ParameterSpec:
             "required": self.required,
             "description": self.description,
             "default": self.default,
+            "format": self.format,
+            "schema_ref": self.schema_ref,
+            "raw": self.raw,
+            "normalization": self.normalization,
         }
 
 
@@ -79,12 +87,20 @@ class ArtifactSpec:
     name: str
     type: str
     description: str = ""
+    format: str | None = None
+    schema_ref: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+    normalization: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "type": self.type,
             "description": self.description,
+            "format": self.format,
+            "schema_ref": self.schema_ref,
+            "raw": self.raw,
+            "normalization": self.normalization,
         }
 
 
@@ -226,6 +242,26 @@ class NormalizationConfig:
             "chart": "diagram",
             "flowchart": "diagram",
             "mermaid": "diagram",
+        }
+    )
+    artifact_format_aliases: dict[str, str] = field(
+        default_factory=lambda: {
+            "pdf": "pdf",
+            "csv": "csv",
+            "spreadsheet": "csv",
+            "markdown": "markdown",
+            "md": "markdown",
+            "json_object": "json",
+            "json": "json",
+            "slides": "pptx",
+            "presentation": "pptx",
+            "powerpoint": "pptx",
+            "ppt": "ppt",
+            "pptx": "pptx",
+            "png": "png",
+            "jpg": "jpg",
+            "jpeg": "jpg",
+            "svg": "svg",
         }
     )
 

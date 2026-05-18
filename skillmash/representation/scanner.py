@@ -10,7 +10,7 @@ from skillmash.representation.models import SkillFolder
 class SkillFolderScanner:
     """Find folders that contain a SKILL.md entrypoint."""
 
-    def scan(self, skills_root: Path | str) -> list[SkillFolder]:
+    def scan(self, skills_root: Path | str, max_depth: int | None = None) -> list[SkillFolder]:
         root = Path(skills_root).resolve()
         if not root.exists():
             raise FileNotFoundError(f"skills_root does not exist: {root}")
@@ -21,6 +21,10 @@ class SkillFolderScanner:
         for entry in sorted(root.rglob("SKILL.md"), key=lambda path: path.as_posix().lower()):
             folder_path = entry.parent
             relative_path = folder_path.relative_to(root).as_posix()
+            if max_depth is not None and max_depth >= 0:
+                depth = 0 if relative_path == "." else len(folder_path.relative_to(root).parts)
+                if depth > max_depth:
+                    continue
             folders.append(
                 SkillFolder(
                     id_hint=folder_path.name,

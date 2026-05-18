@@ -82,6 +82,12 @@ def main() -> None:
         dest="out_dir_opt",
         help="Directory where representations.json and diagnostics.json are written.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of concurrent LLM extraction workers. Defaults to 1.",
+    )
     args = parser.parse_args()
 
     skills_root_arg = args.skills_root_opt or args.skills_root_pos
@@ -96,10 +102,12 @@ def main() -> None:
     logger.info("starting representation extraction")
     logger.info("skills_root=%s", skills_root)
     logger.info("out_dir=%s", out_dir)
+    logger.info("workers=%s", args.workers)
 
     extractor = RepresentationExtractor(
-        OpenAICompatibleSchemaExtractor(LLMConfig.from_env()),
+        OpenAICompatibleSchemaExtractor(LLMConfig.from_env(REPO_ROOT / ".env")),
         progress=ConsoleProgress(logger),
+        max_workers=args.workers,
     )
     result = extractor.extract_all(skills_root)
     write_result(result, out_dir)
@@ -116,6 +124,7 @@ def main() -> None:
                 "out_dir": str(out_dir),
                 "representation_count": len(result.representations),
                 "diagnostics_count": len(result.diagnostics),
+                "workers": max(1, args.workers),
                 "representations": "representations.json",
                 "diagnostics": "diagnostics.json",
             },

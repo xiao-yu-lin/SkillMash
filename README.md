@@ -2,92 +2,190 @@
 
 Extract Agent Skill representations. Build Skill networks. Power intelligent orchestration.
 
-SkillMash is a first-pass prototype for a Skill orchestration system:
+SkillMash is being rebuilt around a staged architecture. The current working stage is **Skill representation extraction**: scan folder-based Skills, parse `SKILL.md`, call an LLM to extract a candidate schema, normalize input/output names and artifact types, then write structured representation artifacts.
 
-- register atomic, composite, and wrapped skills
-- build a typed Skill graph
-- decompose coarse skills into atomic skills
-- match composable skills through input/output compatibility
-- plan execution paths from a user task
-- inspect the system through a decoupled Python UI
+## Current Focus
 
-## Quick Start
-
-Run tests:
-
-```powershell
-uv run python -m pytest
-```
-
-Run the demo planner:
-
-```powershell
-uv run python skillmash_demo.py
-```
-
-Run the UI:
-
-```powershell
-uv run python run_ui.py --host 127.0.0.1 --port 8765
-```
-
-Then open:
+The implemented path is:
 
 ```text
-http://127.0.0.1:8765
+skills_root/
+  some-skill/
+    SKILL.md
+  another-skill/
+    SKILL.md
+
+-> skillmash.representation
+-> representations.json
+-> diagnostics.json
+-> extraction.log
 ```
 
-## Offline Build / Online Planning
+The first version prioritizes:
 
-Build an offline index from folder-based Skills:
+- stable `SkillRepresentation` data contracts
+- folder scanning and `SKILL.md` frontmatter parsing
+- OpenAI-compatible LLM extraction
+- deterministic input/output `name` normalization
+- shared input/output artifact type normalization
+- light `skill_tags` and `data_tags` cleanup
+- structured diagnostics, progress, and logs
+
+## Environment
+
+Create a `.env` file from [.env.example](.env.example):
+
+```env
+OPENAI_API_KEY=your_api_key_here
+OPENAI_MODEL=gpt-4.1-mini
+OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+`OPENAI_API_KEY` and `OPENAI_MODEL` are required. `OPENAI_BASE_URL` can point to any OpenAI-compatible provider.
+
+Optional overrides:
+
+```env
+SKILLMASH_LLM_API_KEY=your_api_key_here
+SKILLMASH_LLM_MODEL=gpt-4.1-mini
+SKILLMASH_LLM_BASE_URL=https://api.openai.com/v1
+SKILLMASH_LLM_TEMPERATURE=0
+SKILLMASH_LLM_TIMEOUT_SECONDS=60
+```
+
+## Run Representation Extraction
+
+PowerShell:
 
 ```powershell
-$env:OPENAI_API_KEY="..."
-uv run python build.py --skills-root C:\Users\admin\Documents\data\skills --out .skillmash\index
+.\.venv\Scripts\python.exe examples\representation_extraction_demo.py --skills_root C:\Users\admin\Documents\data\skills --out_dir OUTPUT
 ```
 
-The offline builder uses an LLM to extract Skill inputs, outputs, skill tags, and data tags. Progress is printed to `stderr`, and the final build artifact summary is printed as JSON to `stdout`.
+Use concurrent LLM calls to speed up larger Skill folders:
 
 ```powershell
-uv run python build.py --skills-root C:\Users\admin\Documents\data\skills --out .skillmash\index --llm-model gpt-4.1-mini
+.\.venv\Scripts\python.exe examples\representation_extraction_demo.py --skills_root C:\Users\admin\Documents\data\skills --out_dir OUTPUT --workers 8
 ```
 
-Run the online planning service from that build artifact:
+Positional arguments also work:
 
 ```powershell
-uv run python service.py --index .skillmash\index --host 127.0.0.1 --port 8765
+.\.venv\Scripts\python.exe examples\representation_extraction_demo.py C:\Users\admin\Documents\data\skills OUTPUT
 ```
 
-Run the visualization UI for the build artifact:
+Linux:
+
+```bash
+python examples/representation_extraction_demo.py --skills_root /data/xiaoyu/data/skills/20260325 --out_dir /data/xiaoyu/code/SkillMash/OUTPUT --workers 8
+```
+
+The command writes:
+
+```text
+OUTPUT/
+  representations.json
+  diagnostics.json
+  extraction.log
+```
+
+Progress is printed to `stderr` as a small progress bar. A JSON summary is printed to `stdout` when extraction finishes.
+
+## Output Shape
+
+`representations.json` contains normalized Skill records:
+
+```json
+{
+  "representations": [
+    {
+      "id": "aris-arxiv",
+      "name": "Aris Arxiv",
+      "kind": "wrapped",
+      "description": "Search, download, and summarize academic papers from arXiv.",
+      "inputs": [
+        {
+          "name": "query_or_arxiv_id",
+          "type": "text",
+          "required": true,
+          "description": "Search query or arXiv identifier.",
+          "default": null,
+          "format": null,
+          "schema_ref": null,
+          "raw": {
+            "name": "Query or Arxiv ID",
+            "type": "natural language query"
+          },
+          "normalization": {
+            "name_method": "snake_case",
+            "type_method": "alias_map",
+            "raw_type": "natural language query",
+            "normalized_token": "natural_language_query",
+            "confidence": 0.95
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "downloaded_pdf",
+          "type": "paper",
+          "description": "Downloaded paper PDF.",
+          "format": "pdf",
+          "schema_ref": null,
+          "raw": {
+            "name": "Downloaded PDF",
+            "type": "pdf"
+          },
+          "normalization": {
+            "name_method": "snake_case",
+            "type_method": "alias_map",
+            "raw_type": "pdf",
+            "normalized_token": "pdf",
+            "confidence": 0.95
+          }
+        }
+      ],
+      "skill_tags": ["paper", "search", "summarize"],
+      "data_tags": ["pdf", "writing"],
+      "source": {},
+      "metadata": {}
+    }
+  ]
+}
+```
+
+Examples of normalization:
+
+```text
+Query or Arxiv ID        -> query_or_arxiv_id
+Downloaded PDF          -> downloaded_pdf
+natural language query  -> text
+pdf                     -> paper
+pdf                     -> format=pdf
+```
+
+## Run Tests
 
 ```powershell
-uv run python ui.py --index .skillmash\index --host 127.0.0.1 --port 8765
+.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp .pytest-tmp
 ```
+
+The explicit `--basetemp` avoids Windows temp-directory permission issues seen in this workspace.
 
 ## Structure
 
 ```text
 skillmash/
-  core/
-    models.py        core data models
-    registry.py      skill registration and lookup
-    graph.py         typed Skill graph
-    decomposer.py    atomic skill decomposition
-    matcher.py       composition compatibility checks
-    planner.py       goal inference and execution planning
-    scoring.py       candidate plan scoring
-    serialization.py build artifact serialization
-  build/
-    extraction.py    LLM schema extractor for Skill IO/tags
-    offline.py       folder scanning and offline build
-  runtime/
-    online.py        build artifact loading and retrieval
-    app_service.py   UI/API-facing facade
-  interfaces/
-    api.py           FastAPI app
-    ui_server.py     lightweight demo UI server
-  samples/
-    examples.py      sample registry for demos and tests
+  representation/
+    models.py       representation data contracts
+    scanner.py      finds folders containing SKILL.md
+    manifest.py     parses SKILL.md frontmatter and body
+    extractor.py    OpenAI-compatible LLM schema extractor
+    normalizer.py   deterministic schema normalization
+    pipeline.py     scan -> parse -> extract -> normalize orchestration
+
+examples/
+  representation_extraction_demo.py
+
 docs/
   skill-orchestration-system-design.md
   modules/
@@ -96,6 +194,11 @@ docs/
     online-orchestration-retrieval.md
     online-pruning-ranking.md
     online-execution.md
+
 tests/
-  test_core.py
+  test_representation.py
 ```
+
+## Design Notes
+
+The representation module is intentionally independent of graph construction and online orchestration. It produces stable `SkillRepresentation` records; later stages should consume those records instead of rereading `SKILL.md`.

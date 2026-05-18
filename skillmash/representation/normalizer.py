@@ -133,6 +133,19 @@ class SkillRepresentationNormalizer:
                     required=True,
                     description="Default text input",
                     default=None,
+                    format=None,
+                    schema_ref=None,
+                    raw={
+                        "name": self.config.default_input_name,
+                        "type": self.config.default_input_type,
+                    },
+                    normalization={
+                        "name_method": "default",
+                        "type_method": "default",
+                        "raw_type": self.config.default_input_type,
+                        "normalized_token": self.config.default_input_type,
+                        "confidence": 1.0,
+                    },
                 )
             ]
 
@@ -140,13 +153,25 @@ class SkillRepresentationNormalizer:
         for raw in raw_inputs:
             data = _to_dict(raw)
             raw_type = str(data.get("type") or self.config.default_input_type)
+            type_result = self._normalize_artifact_type(raw_type, manifest, skill_id, diagnostics)
+            raw_name = str(data.get("name") or self.config.default_input_name)
             inputs.append(
                 ParameterSpec(
-                    name=_normalize_parameter_name(str(data.get("name") or self.config.default_input_name)),
-                    type=self._normalize_artifact_type(raw_type, manifest, skill_id, diagnostics),
+                    name=_normalize_parameter_name(raw_name),
+                    type=type_result["type"],
                     required=bool(data.get("required", True)),
                     description=str(data.get("description") or ""),
                     default=data.get("default"),
+                    format=type_result["format"],
+                    schema_ref=data.get("schema_ref"),
+                    raw={
+                        "name": raw_name,
+                        "type": raw_type,
+                    },
+                    normalization={
+                        "name_method": "snake_case",
+                        **type_result["normalization"],
+                    },
                 )
             )
         return inputs
@@ -174,6 +199,19 @@ class SkillRepresentationNormalizer:
                     name=self.config.default_output_name,
                     type=self.config.unknown_type,
                     description="Unknown output",
+                    format=None,
+                    schema_ref=None,
+                    raw={
+                        "name": self.config.default_output_name,
+                        "type": self.config.unknown_type,
+                    },
+                    normalization={
+                        "name_method": "default",
+                        "type_method": "default_unknown",
+                        "raw_type": self.config.unknown_type,
+                        "normalized_token": self.config.unknown_type,
+                        "confidence": 0.0,
+                    },
                 )
             ]
 
@@ -181,11 +219,23 @@ class SkillRepresentationNormalizer:
         for raw in raw_outputs:
             data = _to_dict(raw)
             raw_type = str(data.get("type") or self.config.unknown_type)
+            type_result = self._normalize_artifact_type(raw_type, manifest, skill_id, diagnostics)
+            raw_name = str(data.get("name") or self.config.default_output_name)
             outputs.append(
                 ArtifactSpec(
-                    name=_normalize_parameter_name(str(data.get("name") or self.config.default_output_name)),
-                    type=self._normalize_artifact_type(raw_type, manifest, skill_id, diagnostics),
+                    name=_normalize_parameter_name(raw_name),
+                    type=type_result["type"],
                     description=str(data.get("description") or ""),
+                    format=type_result["format"],
+                    schema_ref=data.get("schema_ref"),
+                    raw={
+                        "name": raw_name,
+                        "type": raw_type,
+                    },
+                    normalization={
+                        "name_method": "snake_case",
+                        **type_result["normalization"],
+                    },
                 )
             )
         return outputs
@@ -196,11 +246,21 @@ class SkillRepresentationNormalizer:
         manifest: RawSkillManifest,
         skill_id: str,
         diagnostics: list[ExtractionDiagnostic],
-    ) -> str:
+    ) -> dict[str, Any]:
         token = _normalize_token(raw_type)
         normalized = self.config.artifact_type_aliases.get(token, token)
+        artifact_format = self.config.artifact_format_aliases.get(token)
         if normalized in self.config.artifact_type_vocab:
-            return normalized
+            return {
+                "type": normalized,
+                "format": artifact_format,
+                "normalization": {
+                    "type_method": "alias_map" if normalized != token else "exact",
+                    "raw_type": raw_type,
+                    "normalized_token": token,
+                    "confidence": 0.95 if normalized != token else 1.0,
+                },
+            }
 
         diagnostics.append(
             ExtractionDiagnostic(
@@ -213,7 +273,16 @@ class SkillRepresentationNormalizer:
                 details={"original_type": raw_type, "normalized_token": token},
             )
         )
-        return self.config.unknown_type
+        return {
+            "type": self.config.unknown_type,
+            "format": artifact_format,
+            "normalization": {
+                "type_method": "unknown",
+                "raw_type": raw_type,
+                "normalized_token": token,
+                "confidence": 0.0,
+            },
+        }
 
     def _normalize_tags(self, tags: list[str]) -> list[str]:
         return sorted({token for tag in tags if (token := _normalize_token(str(tag)))})

@@ -2,7 +2,7 @@
 
 Extract Agent Skill representations. Build Skill networks. Power intelligent orchestration.
 
-SkillMash is being rebuilt around a staged architecture. The current working stage is **Skill representation extraction**: scan folder-based Skills, parse `SKILL.md`, call an LLM to extract a candidate schema, normalize input/output names and artifact types, then write structured representation artifacts.
+SkillMash is being rebuilt around a staged architecture. The current working stage is **Skill representation extraction**: scan folder-based Skills, parse `SKILL.md`, call an LLM to extract a candidate schema, normalize input/output names and data representation types, then write structured representation artifacts.
 
 ## Current Focus
 
@@ -18,6 +18,8 @@ skills_root/
 -> skillmash.representation
 -> representations.json
 -> diagnostics.json
+-> normalization_decisions.json
+-> io_name_vocab.json
 -> extraction.log
 ```
 
@@ -26,9 +28,8 @@ The first version prioritizes:
 - stable `SkillRepresentation` data contracts
 - folder scanning and `SKILL.md` frontmatter parsing
 - OpenAI-compatible LLM extraction
-- deterministic input/output `name` normalization
-- shared input/output artifact type normalization
-- light `skill_tags` and `data_tags` cleanup
+- dynamic input/output `name` normalization through `io_name_vocab`
+- shared input/output data representation `type` normalization
 - structured diagnostics, progress, and logs
 
 ## Environment
@@ -67,6 +68,12 @@ Use concurrent LLM calls to speed up larger Skill folders:
 .\.venv\Scripts\python.exe examples\representation_extraction_demo.py --skills_root C:\Users\admin\Documents\data\skills --out_dir OUTPUT --workers 8
 ```
 
+By default, unseen `io_name_vocab` terms are resolved with the LLM. To use the local heuristic resolver instead, add:
+
+```powershell
+.\.venv\Scripts\python.exe examples\representation_extraction_demo.py --skills_root C:\Users\admin\Documents\data\skills --out_dir OUTPUT --heuristic_vocab_resolver
+```
+
 Positional arguments also work:
 
 ```powershell
@@ -85,6 +92,8 @@ The command writes:
 OUTPUT/
   representations.json
   diagnostics.json
+  normalization_decisions.json
+  io_name_vocab.json
   extraction.log
 ```
 
@@ -104,50 +113,23 @@ Progress is printed to `stderr` as a small progress bar. A JSON summary is print
       "description": "Search, download, and summarize academic papers from arXiv.",
       "inputs": [
         {
-          "name": "query_or_arxiv_id",
+          "name": "query",
           "type": "text",
           "required": true,
           "description": "Search query or arXiv identifier.",
           "default": null,
-          "format": null,
-          "schema_ref": null,
-          "raw": {
-            "name": "Query or Arxiv ID",
-            "type": "natural language query"
-          },
-          "normalization": {
-            "name_method": "snake_case",
-            "type_method": "alias_map",
-            "raw_type": "natural language query",
-            "normalized_token": "natural_language_query",
-            "confidence": 0.95
-          }
+          "schema_ref": null
         }
       ],
       "outputs": [
         {
-          "name": "downloaded_pdf",
-          "type": "paper",
+          "name": "paper",
+          "type": "pdf",
           "description": "Downloaded paper PDF.",
-          "format": "pdf",
-          "schema_ref": null,
-          "raw": {
-            "name": "Downloaded PDF",
-            "type": "pdf"
-          },
-          "normalization": {
-            "name_method": "snake_case",
-            "type_method": "alias_map",
-            "raw_type": "pdf",
-            "normalized_token": "pdf",
-            "confidence": 0.95
-          }
+          "schema_ref": null
         }
       ],
-      "skill_tags": ["paper", "search", "summarize"],
-      "data_tags": ["pdf", "writing"],
-      "source": {},
-      "metadata": {}
+      "source": {}
     }
   ]
 }
@@ -156,11 +138,21 @@ Progress is printed to `stderr` as a small progress bar. A JSON summary is print
 Examples of normalization:
 
 ```text
-Query or Arxiv ID        -> query_or_arxiv_id
-Downloaded PDF          -> downloaded_pdf
+Query or Arxiv ID        -> query
+Downloaded PDF          -> paper
 natural language query  -> text
-pdf                     -> paper
-pdf                     -> format=pdf
+pdf                     -> pdf
+```
+
+Normalization decisions are written separately to `normalization_decisions.json` so graph-facing representations stay compact and stable. The final dynamic input/output name vocabulary is written to `io_name_vocab.json`.
+
+When a new I/O name is not already in `io_name_vocab`, the resolver chooses one of:
+
+```text
+alias_existing        add the new spelling as an alias of an existing term
+create_new            add a new vocab term while capacity remains
+merge_existing        force-merge into an existing term when the vocab is full
+exclude_non_runtime   drop logging/statistics/telemetry/original-copy fields
 ```
 
 ## Run Tests
@@ -180,8 +172,12 @@ skillmash/
     scanner.py      finds folders containing SKILL.md
     manifest.py     parses SKILL.md frontmatter and body
     extractor.py    OpenAI-compatible LLM schema extractor
+    io_name_vocab.py dynamic input/output name vocabulary
+    llm.py          shared OpenAI-compatible client helpers
     normalizer.py   deterministic schema normalization
     pipeline.py     scan -> parse -> extract -> normalize orchestration
+    utils.py        shared text normalization helpers
+    writer.py       writes extraction JSON artifacts
 
 examples/
   representation_extraction_demo.py

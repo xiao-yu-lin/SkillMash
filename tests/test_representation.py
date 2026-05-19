@@ -6,6 +6,7 @@ from pathlib import Path
 from skillmash.representation import (
     ArtifactSpec,
     ExtractedSkillSchema,
+    NormalizationConfig,
     ParameterSpec,
     RepresentationExtractor,
     SkillFolder,
@@ -84,8 +85,6 @@ def test_normalizer_normalizes_input_and_output_names_and_types(tmp_path: Path) 
                 type="pdf",
             )
         ],
-        skill_tags=["Search", "Paper", "summarize"],
-        data_tags=["PDF", "writing"],
         confidence=0.86,
     )
 
@@ -93,26 +92,51 @@ def test_normalizer_normalizes_input_and_output_names_and_types(tmp_path: Path) 
     representation = result.representation
 
     assert representation.id == "aris-arxiv"
-    assert representation.inputs[0].name == "query_or_arxiv_id"
+    assert representation.inputs[0].name == "query"
     assert representation.inputs[0].type == "text"
-    assert representation.inputs[0].format is None
-    assert representation.inputs[0].raw == {
-        "name": "Query or Arxiv ID",
-        "type": "natural language query",
+    assert representation.outputs[0].name == "paper"
+    assert representation.outputs[0].type == "pdf"
+    assert representation.source["body_sha256"] == manifest.body_sha256
+    assert representation.inputs[0].to_dict() == {
+        "name": "query",
+        "type": "text",
+        "required": True,
+        "description": "",
+        "default": None,
+        "schema_ref": None,
     }
-    assert representation.inputs[0].normalization["type_method"] == "alias_map"
-    assert representation.outputs[0].name == "downloaded_pdf"
-    assert representation.outputs[0].type == "paper"
-    assert representation.outputs[0].format == "pdf"
-    assert representation.outputs[0].raw == {
-        "name": "Downloaded PDF",
-        "type": "pdf",
-    }
-    assert representation.outputs[0].normalization["raw_type"] == "pdf"
-    assert representation.skill_tags == ["paper", "search", "summarize"]
-    assert representation.data_tags == ["pdf", "writing"]
-    assert representation.quality["extraction_confidence"] == 0.86
-    assert representation.metadata["normalizer"]["version"] == "representation-normalizer-v1"
+
+    name_decisions = [
+        decision for decision in result.decisions
+        if decision.field == "name"
+    ]
+    assert name_decisions[0].method == "vocab_alias"
+    assert name_decisions[0].token == "query_or_arxiv_id"
+    assert name_decisions[1].method == "vocab_alias"
+    assert name_decisions[1].token == "downloaded_pdf"
+
+
+def test_normalizer_uses_shared_io_name_vocab_aliases(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    extracted = ExtractedSkillSchema(
+        description="Connect output and input ports by vocab term.",
+        inputs=[{"name": "Research Topic", "type": "text"}],
+        outputs=[{"name": "Short Summary", "type": "summary"}],
+    )
+
+    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+
+    assert result.representation.inputs[0].name == "topic"
+    assert result.representation.outputs[0].name == "summary"
+    assert result.decisions[0].raw_value == "Research Topic"
+    assert result.decisions[2].raw_value == "Short Summary"
+
+
+def test_normalization_config_exposes_io_name_vocab_size_limit() -> None:
+    config = NormalizationConfig()
+
+    assert config.max_vocab_size == 8
+    assert not hasattr(config, "max_canonical_names")
 
 
 def test_normalizer_creates_defaults_and_diagnostics(tmp_path: Path) -> None:
@@ -125,12 +149,145 @@ def test_normalizer_creates_defaults_and_diagnostics(tmp_path: Path) -> None:
     assert result.representation.inputs[0].type == "text"
     assert result.representation.outputs[0].name == "result"
     assert result.representation.outputs[0].type == "unknown"
-    assert result.representation.inputs[0].raw["name"] == "input"
-    assert result.representation.outputs[0].normalization["type_method"] == "default_unknown"
+    assert result.decisions[0].method == "default"
+    assert result.decisions[3].method == "default_unknown"
     assert {diagnostic.code for diagnostic in result.diagnostics} == {
         "default_input_created",
         "unknown_output_created",
     }
+
+
+def test_normalizer_adds_new_io_name_to_vocab_when_capacity_remains(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    extracted = ExtractedSkillSchema(
+        description="Handle a customer intent.",
+        inputs=[{"name": "Customer Intent", "type": "text"}],
+        outputs=[{"name": "Downloaded PDF", "type": "pdf"}],
+    )
+
+    normalizer = SkillRepresentationNormalizer()
+    result = normalizer.normalize(manifest, extracted)
+
+    assert result.representation.inputs[0].name == "customer_intent"
+    assert normalizer.io_name_vocabulary.lookup("customer_intent") == "customer_intent"
+    assert result.decisions[0].method == "create_new"
+
+
+def test_normalizer_merges_new_io_name_when_vocab_is_full(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    config = NormalizationConfig(
+        max_vocab_size=1,
+        io_name_aliases={"search_query": "query"},
+    )
+    extracted = ExtractedSkillSchema(
+        description="Force merge a new name.",
+        inputs=[{"name": "Travel Request Text", "type": "text"}],
+        outputs=[{"name": "Search Query", "type": "text"}],
+    )
+
+    result = SkillRepresentationNormalizer(config).normalize(manifest, extracted)
+
+    assert result.representation.inputs[0].name == "query"
+    assert result.decisions[0].method == "merge_existing"
+    assert result.decisions[0].details["forced_merge"] is True
+
+
+def test_normalizer_excludes_non_runtime_io_names(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    extracted = ExtractedSkillSchema(
+        description="Search flights.",
+        inputs=[
+            {"name": "Query", "type": "text"},
+            {
+                "name": "Origin Query",
+                "type": "text",
+                "description": "用户原始查询内容，用于统计",
+            },
+        ],
+        outputs=[{"name": "Search Query", "type": "text"}],
+    )
+
+    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+
+    assert [item.name for item in result.representation.inputs] == ["query"]
+    assert any(
+        decision.method == "exclude_non_runtime"
+        and decision.token == "origin_query"
+        for decision in result.decisions
+    )
+
+
+def test_normalizer_merges_duplicate_inputs_after_name_normalization(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    extracted = ExtractedSkillSchema(
+        description="Get weather.",
+        inputs=[
+            {
+                "name": "Query",
+                "type": "text",
+                "required": True,
+                "description": "City or region name.",
+            },
+            {
+                "name": "Search Query",
+                "type": "natural language query",
+                "required": False,
+                "description": "Forecast days, optional 1-7 days.",
+                "default": 1,
+            },
+        ],
+        outputs=[{"name": "Short Summary", "type": "text"}],
+    )
+
+    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+    inputs = result.representation.inputs
+
+    assert len(inputs) == 1
+    assert inputs[0].name == "query"
+    assert inputs[0].type == "text"
+    assert inputs[0].required is True
+    assert inputs[0].default == 1
+    assert inputs[0].description == (
+        "City or region name. Forecast days, optional 1-7 days."
+    )
+    assert any(
+        diagnostic.code == "duplicate_input_merged"
+        and diagnostic.details["name"] == "query"
+        for diagnostic in result.diagnostics
+    )
+
+
+def test_normalizer_merges_duplicate_outputs_after_name_normalization(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    extracted = ExtractedSkillSchema(
+        description="Summarize.",
+        inputs=[{"name": "Research Topic", "type": "text"}],
+        outputs=[
+            {
+                "name": "Short Summary",
+                "type": "markdown",
+                "description": "Markdown summary.",
+            },
+            {
+                "name": "Final Answer",
+                "type": "text",
+                "description": "Plain text answer.",
+            },
+        ],
+    )
+
+    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+    outputs = result.representation.outputs
+
+    assert len(outputs) == 1
+    assert outputs[0].name == "summary"
+    assert outputs[0].type == "markdown"
+    assert outputs[0].description == "Markdown summary. Plain text answer."
+    assert any(
+        diagnostic.code == "duplicate_output_merged"
+        and diagnostic.details["type_conflict"] is True
+        for diagnostic in result.diagnostics
+    )
 
 
 def test_schema_from_llm_payload_keeps_candidate_names_for_normalizer() -> None:
@@ -150,8 +307,6 @@ def test_schema_from_llm_payload_keeps_candidate_names_for_normalizer() -> None:
                     "type": "pdf",
                 }
             ],
-            "skill_tags": ["Search"],
-            "data_tags": ["PDF"],
             "constraints": [],
             "confidence": 0.9,
             "warnings": [],
@@ -161,6 +316,24 @@ def test_schema_from_llm_payload_keeps_candidate_names_for_normalizer() -> None:
     assert schema.inputs[0].name == "Query or Arxiv ID"
     assert schema.outputs[0].type == "pdf"
     assert schema.confidence == 0.9
+
+
+def test_schema_from_llm_payload_combines_legacy_format_into_type() -> None:
+    schema = schema_from_llm_payload(
+        {
+            "description": "Download a paper.",
+            "inputs": [],
+            "outputs": [
+                {
+                    "name": "Downloaded PDF",
+                    "type": "paper",
+                    "format": "pdf",
+                }
+            ],
+        }
+    )
+
+    assert schema.outputs[0].type == "pdf"
 
 
 def test_representation_extractor_accepts_pluggable_schema_extractor(tmp_path: Path) -> None:
@@ -176,9 +349,7 @@ def test_representation_extractor_accepts_pluggable_schema_extractor(tmp_path: P
             return ExtractedSkillSchema(
                 description="Create a short summary.",
                 inputs=[{"name": "Research Topic", "type": "text"}],
-                outputs=[{"name": "Short Summary", "type": "summary"}],
-                skill_tags=["Summarize"],
-                data_tags=["Text"],
+                outputs=[{"name": "Short Summary", "type": "markdown"}],
             )
 
     result = RepresentationExtractor(FakeSchemaExtractor()).extract_all(tmp_path)
@@ -186,9 +357,11 @@ def test_representation_extractor_accepts_pluggable_schema_extractor(tmp_path: P
     assert len(result.representations) == 1
     representation = result.representations[0]
     assert representation.id == "demo-skill"
-    assert representation.inputs[0].name == "research_topic"
-    assert representation.outputs[0].name == "short_summary"
+    assert representation.inputs[0].name == "topic"
+    assert representation.outputs[0].name == "summary"
     assert result.diagnostics == []
+    assert result.io_name_vocab["version"] == "io-name-vocab-v1"
+    assert any(term["name"] == "topic" for term in result.io_name_vocab["terms"])
 
 
 def test_representation_extractor_keeps_scan_order_with_workers(tmp_path: Path) -> None:
@@ -207,7 +380,7 @@ def test_representation_extractor_keeps_scan_order_with_workers(tmp_path: Path) 
             return ExtractedSkillSchema(
                 description="Create a short summary.",
                 inputs=[{"name": "Research Topic", "type": "text"}],
-                outputs=[{"name": "Short Summary", "type": "summary"}],
+                outputs=[{"name": "Short Summary", "type": "markdown"}],
             )
 
     result = RepresentationExtractor(SlowSchemaExtractor(), max_workers=3).extract_all(tmp_path)

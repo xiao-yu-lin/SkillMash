@@ -9,6 +9,7 @@ from typing import Callable
 from skillmash.representation.manifest import SkillManifestParser
 from skillmash.representation.models import (
     ExtractionDiagnostic,
+    NormalizationDecision,
     RepresentationExtractionResult,
     SkillSchemaExtractor,
 )
@@ -40,6 +41,7 @@ class RepresentationExtractor:
     def extract_all(self, skills_root: Path | str) -> RepresentationExtractionResult:
         representations_by_index = {}
         diagnostics: list[ExtractionDiagnostic] = []
+        normalization_decisions: list[NormalizationDecision] = []
 
         folders = self.scanner.scan(skills_root)
         total = len(folders)
@@ -50,11 +52,14 @@ class RepresentationExtractor:
                 result = self._process_folder(index, folder, total)
                 representations_by_index[index] = result.representation
                 diagnostics.extend(result.diagnostics)
+                normalization_decisions.extend(result.decisions)
             return RepresentationExtractionResult(
                 representations=[
                     representations_by_index[index] for index in sorted(representations_by_index)
                 ],
                 diagnostics=diagnostics,
+                normalization_decisions=normalization_decisions,
+                io_name_vocab=self.normalizer.io_name_vocabulary.to_dict(),
             )
 
         completed = 0
@@ -68,6 +73,7 @@ class RepresentationExtractor:
                 result = future.result()
                 representations_by_index[index] = result.representation
                 diagnostics.extend(result.diagnostics)
+                normalization_decisions.extend(result.decisions)
                 completed += 1
                 self._emit_progress("done", completed, total, folder.relative_path)
 
@@ -76,6 +82,8 @@ class RepresentationExtractor:
                 representations_by_index[index] for index in sorted(representations_by_index)
             ],
             diagnostics=diagnostics,
+            normalization_decisions=normalization_decisions,
+            io_name_vocab=self.normalizer.io_name_vocabulary.to_dict(),
         )
 
     def _process_folder(self, index: int, folder, total: int):

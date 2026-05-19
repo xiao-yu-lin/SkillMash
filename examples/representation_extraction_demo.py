@@ -12,6 +12,8 @@ The LLM configuration is read from .env or the process environment:
 The command writes:
     <out_dir>/representations.json
     <out_dir>/diagnostics.json
+    <out_dir>/normalization_decisions.json
+    <out_dir>/io_name_vocab.json
 """
 
 from __future__ import annotations
@@ -27,10 +29,17 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from skillmash.representation import (  # noqa: E402
+    HeuristicIONameResolver,
+    IONameCandidate,
+    IONameResolution,
+    IONameVocabulary,
     LLMConfig,
+    NormalizationConfig,
     OpenAICompatibleSchemaExtractor,
-    RepresentationExtractionResult,
+    OpenAICompatibleIONameResolver,
     RepresentationExtractor,
+    SkillRepresentationNormalizer,
+    write_extraction_result,
 )
 
 
@@ -58,6 +67,42 @@ class ConsoleProgress:
             print(file=sys.stderr, flush=True)
 
 
+class VocabularyProgress:
+    """Log each LLM-backed io_name_vocab decision so normalize is not silent."""
+
+    def __init__(self, logger: logging.Logger) -> None:
+        self.logger = logger
+
+    def __call__(
+        self,
+        stage: str,
+        candidate: IONameCandidate,
+        resolution: IONameResolution | None,
+    ) -> None:
+        if resolution is None:
+            self.logger.info(
+                "stage=vocab_resolve status=start skill_id=%s direction=%s token=%s type=%s",
+                candidate.skill_id,
+                candidate.direction,
+                candidate.token,
+                candidate.data_type,
+            )
+            return
+        self.logger.info(
+            (
+                "stage=vocab_resolve status=done skill_id=%s direction=%s "
+                "token=%s action=%s target=%s confidence=%s forced_merge=%s"
+            ),
+            candidate.skill_id,
+            candidate.direction,
+            candidate.token,
+            resolution.action,
+            resolution.normalized_name,
+            resolution.confidence,
+            resolution.forced_merge,
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Extract normalized Skill representations from Skill folders."
@@ -70,7 +115,10 @@ def main() -> None:
     parser.add_argument(
         "out_dir_pos",
         nargs="?",
-        help="Directory where representations.json and diagnostics.json are written.",
+        help=(
+            "Directory where representations.json, diagnostics.json, "
+            "normalization_decisions.json, and io_name_vocab.json are written."
+        ),
     )
     parser.add_argument(
         "--skills_root",
@@ -80,13 +128,24 @@ def main() -> None:
     parser.add_argument(
         "--out_dir",
         dest="out_dir_opt",
-        help="Directory where representations.json and diagnostics.json are written.",
+        help=(
+            "Directory where representations.json, diagnostics.json, "
+            "normalization_decisions.json, and io_name_vocab.json are written."
+        ),
     )
     parser.add_argument(
         "--workers",
         type=int,
         default=1,
         help="Number of concurrent LLM extraction workers. Defaults to 1.",
+    )
+    parser.add_argument(
+        "--heuristic_vocab_resolver",
+        action="store_true",
+        help=(
+            "Resolve unseen io_name_vocab terms with a local heuristic. "
+            "By default, unseen terms are resolved with the LLM."
+        ),
     )
     args = parser.parse_args()
 
@@ -103,18 +162,41 @@ def main() -> None:
     logger.info("skills_root=%s", skills_root)
     logger.info("out_dir=%s", out_dir)
     logger.info("workers=%s", args.workers)
+    logger.info(
+        "io_name_vocab_resolver=%s",
+        "heuristic" if args.heuristic_vocab_resolver else "llm",
+    )
 
+    llm_config = LLMConfig.from_env(REPO_ROOT / ".env")
+    normalization_config = NormalizationConfig()
+    io_name_resolver = (
+        HeuristicIONameResolver()
+        if args.heuristic_vocab_resolver
+        else OpenAICompatibleIONameResolver(
+            llm_config,
+            progress=VocabularyProgress(logger),
+        )
+    )
     extractor = RepresentationExtractor(
-        OpenAICompatibleSchemaExtractor(LLMConfig.from_env(REPO_ROOT / ".env")),
+        OpenAICompatibleSchemaExtractor(llm_config),
+        normalizer=SkillRepresentationNormalizer(
+            config=normalization_config,
+            io_name_vocabulary=IONameVocabulary.from_config(normalization_config),
+            io_name_resolver=io_name_resolver,
+        ),
         progress=ConsoleProgress(logger),
         max_workers=args.workers,
     )
     result = extractor.extract_all(skills_root)
-    write_result(result, out_dir)
+    write_extraction_result(result, out_dir)
     logger.info(
-        "finished representation extraction representation_count=%s diagnostics_count=%s",
+        (
+            "finished representation extraction representation_count=%s "
+            "diagnostics_count=%s normalization_decision_count=%s"
+        ),
         len(result.representations),
         len(result.diagnostics),
+        len(result.normalization_decisions),
     )
 
     print(
@@ -124,9 +206,13 @@ def main() -> None:
                 "out_dir": str(out_dir),
                 "representation_count": len(result.representations),
                 "diagnostics_count": len(result.diagnostics),
+                "normalization_decision_count": len(result.normalization_decisions),
                 "workers": max(1, args.workers),
+                "io_name_vocab_resolver": "heuristic" if args.heuristic_vocab_resolver else "llm",
                 "representations": "representations.json",
                 "diagnostics": "diagnostics.json",
+                "normalization_decisions": "normalization_decisions.json",
+                "io_name_vocab": "io_name_vocab.json",
             },
             ensure_ascii=False,
             indent=2,
@@ -148,36 +234,6 @@ def configure_logging(out_dir: Path) -> logging.Logger:
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     return logger
-
-
-def write_result(result: RepresentationExtractionResult, out_dir: Path) -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "representations.json").write_text(
-        json.dumps(
-            {
-                "representations": [
-                    representation.to_dict()
-                    for representation in result.representations
-                ]
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    (out_dir / "diagnostics.json").write_text(
-        json.dumps(
-            {
-                "diagnostics": [
-                    diagnostic.to_dict()
-                    for diagnostic in result.diagnostics
-                ]
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
 
 
 if __name__ == "__main__":

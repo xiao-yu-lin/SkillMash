@@ -1,4 +1,4 @@
-# 表征提取模块设计说明书
+﻿# 表征提取模块设计说明书
 
 ## 1. 模块定位
 
@@ -18,7 +18,7 @@
 
 1. 扫描一个 `skills_root` 下所有合法 Skill 文件夹。
 2. 解析每个 `SKILL.md` 的 frontmatter、正文、工具声明和来源信息。
-3. 通过 LLM 把自然语言描述转成结构化输入、输出、标签和约束。
+3. 通过 LLM 把自然语言描述转成结构化输入和输出。
 4. 归一化为稳定的 `SkillRepresentation v1`。
 5. 输出可供图构建模块直接消费的 `SkillRepresentation[]` 和诊断信息。
 
@@ -61,7 +61,7 @@ RepresentationWriter
 1. 扫描 Skill 文件夹。
 2. 读取并解析 `SKILL.md`。
 3. 构造 LLM 提取上下文。
-4. 调用 LLM 提取输入、输出、Skill 标签、数据标签、约束和质量信号。
+4. 调用 LLM 提取输入、输出和必要约束。
 5. 将 LLM 结果归一化为稳定结构。
 6. 记录提取诊断、模型配置、内容 hash 和来源信息。
 
@@ -105,13 +105,9 @@ LLM 中间输出：
 ExtractedSkillSchema
   inputs
   outputs
-  skill_tags
-  data_tags
   constraints
   preconditions
   postconditions
-  cost
-  quality
   confidence
   warnings
 ```
@@ -121,6 +117,7 @@ ExtractedSkillSchema
 ```text
 SkillRepresentation[]
 ExtractionDiagnostics[]
+NormalizationDecision[]
 ```
 
 当作为离线构建流水线的第一步运行时，输出会继续交给图构建模块；当独立调试运行时，可以写出：
@@ -129,6 +126,8 @@ ExtractionDiagnostics[]
 .skillmash/representation/
   representations.json
   diagnostics.json
+  normalization_decisions.json
+  io_name_vocab.json
 ```
 
 ### 3.3 数据结构视图
@@ -155,13 +154,9 @@ classDiagram
   class ExtractedSkillSchema {
     inputs
     outputs
-    skill_tags
-    data_tags
     constraints
     preconditions
     postconditions
-    cost
-    quality
     confidence
     warnings
   }
@@ -176,14 +171,7 @@ classDiagram
     outputs
     preconditions
     postconditions
-    skill_tags
-    data_tags
-    contains
-    composition
-    cost
-    quality
     source
-    metadata
   }
 
   SkillFolder --> RawSkillManifest
@@ -250,7 +238,7 @@ aris-arxiv/
 {
   "inputs": [
     {
-      "name": "query_or_arxiv_id",
+      "name": "query",
       "type": "text",
       "required": true,
       "description": "Search query or arXiv identifier"
@@ -258,25 +246,23 @@ aris-arxiv/
   ],
   "outputs": [
     {
-      "name": "papers",
-      "type": "paper",
+      "name": "paper",
+      "type": "pdf",
       "description": "Matched paper records or downloaded PDFs"
     },
     {
       "name": "summary",
-      "type": "summary",
+      "type": "markdown",
       "description": "Summary of paper content"
     }
   ],
-  "skill_tags": ["research", "summarization", "web_search"],
-  "data_tags": ["paper", "text", "url"],
   "constraints": [],
   "confidence": 0.86,
   "warnings": []
 }
 ```
 
-5. `SkillRepresentationNormalizer` 重点归一化输入输出的 `name` 和 `type`，并生成可写入 `skills.json` 的结构化 Skill。
+5. `SkillRepresentationNormalizer` 重点归一化输入输出的 `name` 和 `type`，并生成可写入 `skills.json` 的结构化 Skill；归一化证据写入独立的 `normalization_decisions.json`。
 
 ## 4. SkillRepresentation v1
 
@@ -291,51 +277,30 @@ aris-arxiv/
   "version": "1.0.0",
   "inputs": [
     {
-      "name": "query_or_arxiv_id",
+      "name": "query",
       "type": "text",
       "required": true,
       "description": "Search query or arXiv identifier",
-      "default": null
+      "default": null,
+      "schema_ref": null
     }
   ],
   "outputs": [
     {
-      "name": "papers",
-      "type": "paper",
-      "description": "Paper or PDF artifact"
+      "name": "paper",
+      "type": "pdf",
+      "description": "Paper or PDF artifact",
+      "schema_ref": null
     }
   ],
   "preconditions": [],
   "postconditions": [],
-  "skill_tags": ["research", "web_search"],
-  "data_tags": ["paper", "text"],
-  "contains": [],
-  "composition": null,
-  "cost": {
-    "latency": 3,
-    "money": 1,
-    "complexity": 2
-  },
-  "quality": {
-    "reliability": 0.7,
-    "extraction_confidence": 0.86
-  },
   "source": {
     "type": "folder",
     "path": "C:\\Users\\admin\\Documents\\data\\skills\\aris-arxiv",
     "entry": "C:\\Users\\admin\\Documents\\data\\skills\\aris-arxiv\\SKILL.md",
-    "relative_path": "aris-arxiv"
-  },
-  "metadata": {
-    "frontmatter": {},
-    "allowed_tools": ["Bash(*)", "Read"],
-    "body_sha256": "...",
-    "schema_version": "skill-representation-v1",
-    "extractor": {
-      "provider": "openai-compatible",
-      "model": "gpt-4.1-mini",
-      "prompt_version": "representation-extraction-v1"
-    }
+    "relative_path": "aris-arxiv",
+    "body_sha256": "..."
   }
 }
 ```
@@ -353,14 +318,7 @@ aris-arxiv/
 | `outputs` | 是 | LLM | Skill 产生的产物类型。 |
 | `preconditions` | 是 | LLM | 执行前条件，未知时为空数组。 |
 | `postconditions` | 是 | LLM | 执行后保证，未知时为空数组。 |
-| `skill_tags` | 是 | LLM | 能力标签，用于在线召回和图标签边。 |
-| `data_tags` | 是 | LLM | 数据领域标签，用于数据节点和过滤。 |
-| `contains` | 是 | frontmatter 或默认值 | 组合 Skill 包含的子 Skill，第一阶段默认空。 |
-| `composition` | 否 | frontmatter 或 LLM | 组合模式，第一阶段可为 `null`。 |
-| `cost` | 是 | LLM + 默认值 | 粗粒度成本估计，使用 1 到 5 分。 |
-| `quality` | 是 | LLM + 默认值 | 可靠性和提取置信度。 |
-| `source` | 是 | scanner | 来源路径、入口文件和相对路径。 |
-| `metadata` | 是 | parser + extractor | 原始 frontmatter、工具声明、hash、提取配置。 |
+| `source` | 是 | scanner | 来源路径、入口文件、相对路径和内容 hash。 |
 
 ### 4.2 输入参数结构
 
@@ -376,8 +334,8 @@ aris-arxiv/
 
 规则：
 
-1. `name` 使用 snake_case。
-2. `type` 使用统一的 `ArtifactType` 受控词表，和输出产物的 `type` 共用同一套类型系统。
+1. `name` 使用 `io_name_vocab` 归一化为语义词项，例如 `query`、`paper`、`summary`。
+2. `type` 使用统一的 `DataType` 受控词表，表达数据传递形态，例如 `text`、`pdf`、`markdown`。
 3. `required` 默认为 `true`。
 4. 没有明确输入时，允许生成默认 `input:text`，但必须写入诊断。
 
@@ -386,7 +344,7 @@ aris-arxiv/
 ```json
 {
   "name": "summary",
-  "type": "summary",
+  "type": "markdown",
   "description": "Generated summary"
 }
 ```
@@ -395,167 +353,61 @@ aris-arxiv/
 
 1. `outputs` 不能为空。
 2. 无法可靠判断输出时，允许输出 `result:unknown`，但必须写入诊断。
-3. `type` 使用统一的 `ArtifactType` 受控词表，和输入参数的 `type` 共用同一套类型系统。
-4. `type` 应尽量表达产物语义，而不是工具名。
+3. `type` 使用统一的 `DataType` 受控词表，和输入参数的 `type` 共用同一套类型系统。
+4. 产物语义放入 `name`，传递形态放入 `type`。
 
-### 4.4 统一 ArtifactType
+### 4.4 `io_name_vocab` 与统一 DataType
 
-输入参数和输出产物的 `type` 必须统一。它们都表达 Skill 消费或产生的 artifact/data 语义类型，而不是参数位置或自然语言描述。
+输入参数和输出产物的 `name` 共用 `io_name_vocab`。它表达图构建用的语义词项，例如 `query`、`topic`、`paper`、`summary`、`report`。动态词表管理器可以用 LLM 判断新名称是否是已有词项的同义词；如果词表容量未达上限，可以新增词项；如果已达上限，则只能合并到现有词项或排除非运行字段。
+
+输入参数和输出产物的 `type` 共用 `DataType`。它表达数据传递形态，而不是产物语义；产物语义放到 `name`。
 
 ```text
-ArtifactType =
+DataType =
   text
+  markdown
+  json
+  csv
+  pdf
+  html
+  docx
+  pptx
+  xlsx
+  png
+  jpg
+  svg
   url
   file
   path
-  paper
-  dataset
-  image
   audio
   video
-  table
-  code
-  json
-  report
-  summary
-  diagram
-  pptx
   unknown
 ```
 
 统一原因：
 
-1. 图构建可以直接用同一类型系统生成 `artifact:<type>` 节点。
-2. 在线编排可以用 `producer.outputs[*].type == consumer.inputs[*].type` 做第一层兼容匹配。
-3. 诊断和归一化只需要维护一套同义词表。
-4. 后续扩展到类型层级时，可以统一表达 `paper -> file`、`pptx -> file` 这类泛化关系。
+1. 图构建可以用 `name + type + schema_ref` 判断输入输出是否可连接。
+2. `name` 负责语义角色，`type` 负责传递形态，避免 `type` 和 `format` 重复。
+3. `normalization_decisions.json` 记录名称和类型为什么这样归一化，最终表征保持干净。
+4. 后续扩展到类型层级时，可以统一表达 `pdf -> file`、`pptx -> file` 这类泛化关系。
 
 命名规则：
 
 1. `type` 使用单数、小写、snake_case。
-2. 具体格式不进入 `type`，放入 `metadata` 或未来的 `format` 字段。例如 PDF 论文仍是 `paper`，文件格式可记录为 `format: "pdf"`。
+2. 不再输出 `format` 字段；具体格式已经合并到 `type`。
 3. 工具名、平台名和动作名不作为类型。例如 `arxiv`、`web_search`、`summarize` 不应出现在 `type` 中。
 4. 不能判断时使用 `unknown`，并写入诊断。
 
-### 4.5 skill_tags 与 data_tags 的产生
+### 4.5 后续扩展字段
 
-`skill_tags` 和 `data_tags` 都由 LLM 提取产生，再经过归一化器收敛到稳定标签。二者职责不同：
+第一阶段暂不输出 `skill_tags`、`data_tags`、`cost` 和 `quality`。这些字段会在检索、图构建或排序模块明确需要时再引入。
 
-```text
-skill_tags = 这个 Skill 会做什么
-data_tags  = 这个 Skill 主要处理什么数据或产物
-```
+保留策略：
 
-#### 4.5.1 产生流程
-
-```text
-SKILL.md frontmatter + body
-  -> SkillContextBuilder 构造提取上下文
-  -> LLMSchemaExtractor 提取候选标签
-  -> SkillRepresentationNormalizer 归一化、去重、排序、同义词收敛
-  -> SkillRepresentation.skill_tags / data_tags
-```
-
-LLM 提取时主要参考：
-
-1. frontmatter 中的 `name`、`description`、`tags`、`argument-hint`、`allowed-tools`。
-2. 正文中的 use when、能力描述、输入输出说明、示例任务和约束。
-3. 输入输出 `ArtifactType`，用于辅助判断 `data_tags`。
-
-归一化器第一阶段负责：
-
-1. 小写化、snake_case 化和去重。
-2. 丢弃空标签。
-3. 对空标签或低置信标签写入诊断。
-
-归一化器第一阶段不负责：
-
-1. 复杂同义词收敛。
-2. 判断标签属于 `skill_tags` 还是 `data_tags`。
-3. 自动移动放错位置的标签。
-4. 构建长期受控标签词表。
-
-#### 4.5.2 skill_tags
-
-`skill_tags` 描述 Skill 的能力、动作或任务类型，用于能力召回和图中的 `has_skill_tag` 边。
-
-示例：
-
-```json
-{
-  "skill_tags": [
-    "web_search",
-    "research",
-    "summarization",
-    "writing"
-  ]
-}
-```
-
-适合进入 `skill_tags` 的内容：
-
-1. 能力动作：`web_search`、`summarization`、`translation`、`code_generation`。
-2. 工作流能力：`literature_review`、`experiment_planning`、`data_analysis`。
-3. 生成类能力：`report_generation`、`slide_generation`、`diagram_generation`。
-4. 执行类能力：`file_operation`、`api_calling`、`deployment`。
-
-不适合进入 `skill_tags` 的内容：
-
-1. 数据类型，例如 `paper`、`image`、`dataset`。
-2. 具体平台或工具名，例如 `arxiv`、`github`、`modal`，除非后续明确需要平台标签。
-3. 太宽泛的词，例如 `ai`、`tool`、`agent`。
-4. 一次性描述，例如 `find_recent_transformer_papers`。
-
-#### 4.5.3 data_tags
-
-`data_tags` 描述 Skill 主要消费、产生或理解的数据领域和产物类型，用于数据域过滤和图中的 `has_data_tag` 边。
-
-示例：
-
-```json
-{
-  "data_tags": [
-    "paper",
-    "text",
-    "url"
-  ]
-}
-```
-
-适合进入 `data_tags` 的内容：
-
-1. 产物类型：`paper`、`report`、`summary`、`diagram`、`pptx`。
-2. 数据模态：`text`、`image`、`audio`、`video`、`table`。
-3. 数据领域：`code`、`dataset`、`citation`、`experiment_result`。
-4. 外部资源形态：`url`、`file`、`path`。
-
-不适合进入 `data_tags` 的内容：
-
-1. 动作或能力，例如 `search`、`summarize`、`write`。
-2. 工具名或平台名，例如 `arxiv`、`wandb`、`openai`。
-3. 主观质量词，例如 `fast`、`reliable`。
-
-#### 4.5.4 和 ArtifactType 的关系
-
-`ArtifactType` 是输入输出的精确类型；`data_tags` 是可检索的数据语义集合。二者相关但不完全等价。
-
-规则：
-
-1. 每个 `inputs[*].type` 和 `outputs[*].type` 如果不是 `unknown`，通常应进入 `data_tags`。
-2. `data_tags` 可以比 ArtifactType 更丰富。例如输出 `paper` 时，`data_tags` 可以包含 `paper`、`text`、`citation`、`url`。
-3. `skill_tags` 不应复制 ArtifactType，除非该词同时是能力标签并已进入受控词表。
-4. 第一阶段暂不强制从 ArtifactType 自动补充 `data_tags`，避免过早绑定标签策略。
-
-示例：
-
-```json
-{
-  "inputs": [{"name": "query", "type": "text"}],
-  "outputs": [{"name": "papers", "type": "paper"}],
-  "skill_tags": ["web_search", "research"],
-  "data_tags": ["text", "paper", "url", "citation"]
-}
-```
+1. LLM 可返回 `confidence`、`warnings` 和 `constraints`，但第一阶段不进入 `SkillRepresentation` 主体。
+2. 输入输出的 `name` 和 `type` 是当前阶段的主要归一化目标。
+3. `raw`、`normalization` 和 LLM 归一化证据不进入主表征，写入 `normalization_decisions.json`。
+4. 后续如需标签或成本质量评估，应作为独立扩展，不污染第一版最小表征契约。
 
 ## 5. LLM 提取契约
 
@@ -595,8 +447,6 @@ LLM 只接收提取所需的最小上下文：
     "description",
     "inputs",
     "outputs",
-    "skill_tags",
-    "data_tags",
     "constraints",
     "confidence",
     "warnings"
@@ -605,13 +455,9 @@ LLM 只接收提取所需的最小上下文：
     "description": {"type": "string"},
     "inputs": {"type": "array"},
     "outputs": {"type": "array"},
-    "skill_tags": {"type": "array", "items": {"type": "string"}},
-    "data_tags": {"type": "array", "items": {"type": "string"}},
     "constraints": {"type": "array", "items": {"type": "string"}},
     "preconditions": {"type": "array"},
     "postconditions": {"type": "array"},
-    "cost": {"type": "object"},
-    "quality": {"type": "object"},
     "confidence": {"type": "number"},
     "warnings": {"type": "array", "items": {"type": "string"}}
   }
@@ -623,16 +469,17 @@ LLM 只接收提取所需的最小上下文：
 LLM prompt 必须明确：
 
 1. 只根据给定 `SKILL.md` 信息提取，不编造不存在的工具能力。
-2. 输入输出要描述语义产物，不要描述自然语言表述习惯。
-3. 标签必须短小、稳定、可索引。
-4. 不确定时使用 `unknown`，并在 `warnings` 中解释。
-5. 返回 JSON，不返回 markdown。
+2. 输入输出 `name` 要描述语义词项，`type` 要描述数据传递形态。
+3. 第一阶段不要求输出标签、成本或质量评分。
+4. 不输出 `format`；格式信息合并到 `type`。
+5. 不确定时使用 `unknown`，并在 `warnings` 中解释。
+6. 返回 JSON，不返回 markdown。
 
 ## 6. 归一化规则
 
 `SkillRepresentationNormalizer` 是表征模块的稳定化层。LLM 输出的是候选语义结构，Normalizer 负责把候选结构变成可验证、可复现、可被图构建消费的 `SkillRepresentation v1`。
 
-它不重新理解 Skill，不做新的语义推断；它只做确定性的清洗、补齐、校验、收敛和诊断。
+它不重新理解完整 Skill；它只做清洗、补齐、校验、收敛和诊断。对于 `io_name_vocab` 未命中的新名称，它会通过注入的 `IONameResolver` 做局部词表决策；默认 resolver 是确定性的，离线构建入口可以注入 LLM resolver。
 
 输入：
 
@@ -647,6 +494,7 @@ NormalizationConfig
 ```text
 SkillRepresentation
 ExtractionDiagnostic[]
+NormalizationDecision[]
 ```
 
 处理顺序：
@@ -655,12 +503,11 @@ ExtractionDiagnostic[]
 1. 合并 manifest 与 LLM schema
 2. 生成稳定 id/name/version/kind
 3. 归一化 inputs/outputs
-4. 归一化 ArtifactType
-5. 轻量清洗 skill_tags/data_tags
-6. 归一化 constraints/preconditions/postconditions
-7. 补齐 cost/quality/source/metadata
-8. 做最终 schema 校验
-9. 生成诊断
+4. 归一化 io name 与 DataType
+5. 归一化 constraints/preconditions/postconditions
+6. 补齐 source
+7. 做最终 schema 校验
+8. 生成诊断和归一化决策日志
 ```
 
 ### 6.1 ID 与名称
@@ -684,8 +531,8 @@ ExtractionDiagnostic[]
 
 规则：
 
-1. `name` 转为 snake_case。
-2. `type` 必须进入统一 `ArtifactType` 词表。
+1. `name` 先转 token，再通过 `io_name_vocab` 收敛到标准词表项。
+2. `type` 必须进入统一 `DataType` 词表。
 3. `required` 缺失时默认 `true`。
 4. `description` 缺失时填空字符串。
 5. `default` 缺失时填 `null`。
@@ -706,7 +553,7 @@ ExtractionDiagnostic[]
 
 ```json
 {
-  "name": "query_or_arxiv_id",
+  "name": "query",
   "type": "text",
   "required": true,
   "description": "",
@@ -714,64 +561,34 @@ ExtractionDiagnostic[]
 }
 ```
 
-### 6.3 ArtifactType 归一化
+### 6.3 DataType 归一化
 
-ArtifactType 归一化把 LLM 的自由文本类型收敛到受控词表。
+DataType 归一化把 LLM 的自由文本类型收敛到受控词表。这里的 `type` 是数据传递形态，不再和 `format` 拆成两个字段。
 
 示例同义词表：
 
 | 候选类型 | 归一化类型 |
 | --- | --- |
-| `natural language`、`plain text`、`query`、`markdown` | `text` |
+| `natural language`、`plain text`、`query` | `text` |
+| `markdown`、`md` | `markdown` |
 | `link`、`uri`、`webpage` | `url` |
-| `pdf`、`academic_paper`、`publication` | `paper` |
-| `spreadsheet`、`csv`、`dataframe` | `table` |
+| `pdf`、`academic_paper`、`publication` | `pdf` |
+| `spreadsheet`、`csv`、`dataframe` | `csv` |
 | `slides`、`presentation`、`powerpoint` | `pptx` |
-| `source_code`、`script`、`program` | `code` |
-| `chart`、`flowchart`、`mermaid` | `diagram` |
+| `source_code`、`script`、`program` | `text` |
+| `chart`、`flowchart`、`mermaid` | `png/svg/text` |
 
 如果无法归一化：
 
 1. 使用 `unknown`。
 2. 写入 `unsupported_type_normalized` 诊断。
-3. 在 `details.original_type` 中保留原始候选值。
+3. 在 `diagnostics` 和 `normalization_decisions` 中保留原始候选值。
 
-### 6.4 标签轻量清洗
-
-标签体系第一阶段优先级较低，不做复杂同义词收敛和跨命名空间移动。Normalizer 只做轻量、确定性的清洗，保证输出格式稳定：
-
-1. 标签统一小写。
-2. 空格、连字符统一为下划线。
-3. 去重并按字典序排序。
-4. 空标签丢弃。
-5. 不判断 `skill_tags` 和 `data_tags` 是否放错位置。
-6. 不做复杂别名映射，例如暂不把 `search` 收敛为 `web_search`。
-
-示例：
-
-```json
-{
-  "skill_tags": ["Search", "Paper", "summarize"],
-  "data_tags": ["PDF", "writing"]
-}
-```
-
-第一阶段归一化为：
-
-```json
-{
-  "skill_tags": ["paper", "search", "summarize"],
-  "data_tags": ["pdf", "writing"]
-}
-```
-
-后续增强版本再引入受控标签词表、同义词收敛和标签命名空间校正。
-
-### 6.5 约束与条件归一化
+### 6.4 约束与条件归一化
 
 LLM 可能返回自然语言 `constraints`，也可能返回结构化 `preconditions` 和 `postconditions`。Normalizer 的第一阶段策略是保守收敛：
 
-1. 无法结构化的 `constraints` 保存在 `metadata.extraction_constraints`。
+1. 无法结构化的 `constraints` 暂不进入 `SkillRepresentation` 主体，可由 diagnostics 或后续产物记录。
 2. 明确的执行前要求进入 `preconditions`。
 3. 明确的执行后保证进入 `postconditions`。
 4. 条件结构统一为 `{ "type": "...", "expression": "...", "description": "..." }`。
@@ -787,45 +604,7 @@ LLM 可能返回自然语言 `constraints`，也可能返回结构化 `precondit
 }
 ```
 
-### 6.6 工具声明
-
-`allowed-tools` 可能来自 frontmatter 字符串、数组或嵌套 metadata。归一化后写入：
-
-```json
-{
-  "metadata": {
-    "allowed_tools": ["Bash(*)", "Read", "Edit"]
-  }
-}
-```
-
-工具声明只作为元信息和未来执行约束输入，第一阶段不做权限审计。
-
-### 6.7 成本与质量
-
-第一阶段采用粗粒度默认值，避免在线阶段缺字段：
-
-```json
-{
-  "cost": {
-    "latency": 3,
-    "money": 1,
-    "complexity": 2
-  },
-  "quality": {
-    "reliability": 0.7,
-    "extraction_confidence": 0.8
-  }
-}
-```
-
-规则：
-
-1. 分数范围为 1 到 5，越高表示成本越高。
-2. `reliability` 和 `extraction_confidence` 范围为 0 到 1。
-3. LLM 未返回时使用默认值并写入诊断。
-
-### 6.8 source 与 metadata 补齐
+### 6.5 source 补齐
 
 Normalizer 必须补齐可追溯信息：
 
@@ -835,23 +614,8 @@ Normalizer 必须补齐可追溯信息：
     "type": "folder",
     "path": "...",
     "entry": ".../SKILL.md",
-    "relative_path": "aris-arxiv"
-  },
-  "metadata": {
-    "frontmatter": {},
-    "allowed_tools": [],
-    "body_sha256": "...",
-    "schema_version": "skill-representation-v1",
-    "extractor": {
-      "provider": "openai-compatible",
-      "model": "gpt-4.1-mini",
-      "prompt_version": "representation-extraction-v1"
-    },
-    "normalizer": {
-      "version": "representation-normalizer-v1",
-      "artifact_type_vocab": "artifact-type-v1",
-      "tag_vocab": "tag-v1"
-    }
+    "relative_path": "aris-arxiv",
+    "body_sha256": "..."
   }
 }
 ```
@@ -863,11 +627,10 @@ Normalizer 必须补齐可追溯信息：
 Normalizer 输出前必须做最终校验：
 
 1. 必填字段存在。
-2. `inputs[*].type` 和 `outputs[*].type` 都属于 `ArtifactType`。
+2. `inputs[*].type` 和 `outputs[*].type` 都属于 `DataType`。
 3. `outputs` 非空。
-4. `skill_tags` 和 `data_tags` 为去重后的有序数组。
-5. `source.entry` 指向 `SKILL.md`。
-6. `metadata.body_sha256` 存在。
+4. `source.entry` 指向 `SKILL.md`。
+5. `source.body_sha256` 存在。
 
 最终校验失败时生成 `schema_validation_failed`，默认构建失败。
 
@@ -888,23 +651,13 @@ class SkillRepresentationNormalizer:
         extracted: ExtractedSkillSchema,
     ) -> NormalizationResult:
         diagnostics: list[ExtractionDiagnostic] = []
+        decisions: list[NormalizationDecision] = []
 
         identity = normalize_identity(manifest, extracted, self.config, diagnostics)
-        inputs = normalize_inputs(extracted.inputs, self.config, diagnostics)
-        outputs = normalize_outputs(extracted.outputs, self.config, diagnostics)
-        skill_tags, data_tags = normalize_tags(
-            extracted.skill_tags,
-            extracted.data_tags,
-            inputs,
-            outputs,
-            self.config,
-            diagnostics,
-        )
+        inputs = normalize_inputs(extracted.inputs, self.config, diagnostics, decisions)
+        outputs = normalize_outputs(extracted.outputs, self.config, diagnostics, decisions)
         conditions = normalize_conditions(extracted, self.config, diagnostics)
-        cost = normalize_cost(extracted.cost, self.config, diagnostics)
-        quality = normalize_quality(extracted.quality, extracted.confidence, self.config, diagnostics)
         source = build_source(manifest)
-        metadata = build_metadata(manifest, extracted, self.config)
 
         representation = SkillRepresentation(
             id=identity.id,
@@ -916,26 +669,19 @@ class SkillRepresentationNormalizer:
             outputs=outputs,
             preconditions=conditions.preconditions,
             postconditions=conditions.postconditions,
-            skill_tags=skill_tags,
-            data_tags=data_tags,
-            contains=identity.contains,
-            composition=identity.composition,
-            cost=cost,
-            quality=quality,
             source=source,
-            metadata=metadata,
         )
 
         validate_representation(representation, diagnostics)
-        return NormalizationResult(representation, diagnostics)
+        return NormalizationResult(representation, diagnostics, decisions)
 ```
 
 实现原则：
 
-1. Normalizer 不读文件、不调 LLM、不访问网络。
-2. 所有词表和默认值都来自 `NormalizationConfig`。
-3. 每个子函数只处理一个维度，例如 ID、类型、标签、条件。
-4. 子函数可以追加诊断，但不直接打印日志。
+1. Normalizer 不读文件，不直接绑定具体 LLM；未命中 `io_name_vocab` 时只调用注入的 `IONameResolver`。
+2. 所有默认值都来自 `NormalizationConfig`，I/O name 词表来自 `IONameVocabulary`。
+3. 每个子函数只处理一个维度，例如 ID、io name、DataType、条件。
+4. 子函数可以追加诊断和归一化决策，但不直接打印日志。
 5. 输出数组全部稳定排序，避免重复构建产生无意义 diff。
 
 ### 6.11 NormalizationConfig
@@ -946,49 +692,55 @@ class SkillRepresentationNormalizer:
 @dataclass(frozen=True)
 class NormalizationConfig:
     schema_version: str = "skill-representation-v1"
-    normalizer_version: str = "representation-normalizer-v1"
-    artifact_type_vocab_version: str = "artifact-type-v1"
-    tag_vocab_version: str = "tag-v1"
+    io_name_vocab_version: str = "io-name-vocab-v1"
+    data_type_vocab_version: str = "data-type-v1"
+    max_vocab_size: int = 8
     default_kind: str = "wrapped"
     default_version: str = "1.0.0"
     default_input_name: str = "input"
     default_input_type: str = "text"
     default_output_name: str = "result"
     unknown_type: str = "unknown"
-    artifact_type_aliases: dict[str, str] = field(default_factory=dict)
-    skill_tag_aliases: dict[str, str] = field(default_factory=dict)
-    data_tag_aliases: dict[str, str] = field(default_factory=dict)
-    skill_tag_vocab: set[str] = field(default_factory=set)
-    data_tag_vocab: set[str] = field(default_factory=set)
+    data_type_aliases: dict[str, str] = field(default_factory=dict)
+    io_name_aliases: dict[str, str] = field(default_factory=dict)
 ```
 
-第一阶段可以先把词表写在代码常量中；当标签体系稳定后，再移动到独立 JSON/YAML。
+第一阶段可以先把词表写在代码常量中；动态 `io_name_vocab` 稳定后，再移动到独立 JSON/YAML。
 
 示例：
 
 ```python
-ARTIFACT_TYPE_ALIASES = {
+DATA_TYPE_ALIASES = {
     "natural_language": "text",
     "plain_text": "text",
     "query": "text",
-    "pdf": "paper",
-    "academic_paper": "paper",
-    "spreadsheet": "table",
-    "dataframe": "table",
+    "paper": "pdf",
+    "academic_paper": "pdf",
+    "spreadsheet": "csv",
+    "dataframe": "csv",
     "slides": "pptx",
     "presentation": "pptx",
-    "source_code": "code",
-}
-
-SKILL_TAG_ALIASES = {
-    "search": "web_search",
-    "lookup": "web_search",
-    "retrieve": "retrieval",
-    "summarize": "summarization",
-    "write": "writing",
-    "slides": "slide_generation",
+    "source_code": "text",
 }
 ```
+
+动态 `io_name_vocab` 约束：
+
+1. `io_name_vocab` 词表容量有上限，例如 `max_vocab_size = 8`。
+2. alias 数量不设硬上限，只记录频次、首次出现、最近出现和置信度。
+3. 未命中新名称时，由注入的 `IONameResolver` 判断 `alias_existing`、`create_new`、`exclude_non_runtime` 或 `merge_existing`；示例脚本默认使用 LLM resolver，也可显式切换到本地 heuristic resolver。
+4. 达到词表容量上限后，禁止 `create_new`，必须合并到现有词项或排除非运行字段。
+5. LLM 决策自动生效，但必须写入 `normalization_decisions.json`，方便复现和回滚。
+6. 离线构建完成后必须保存最终 `io_name_vocab.json`，供下一轮构建复用。
+
+`io_name_vocab` 决策动作：
+
+| action | 含义 |
+| --- | --- |
+| `alias_existing` | 新名称是已有词项的同义词，加入该词项 aliases。 |
+| `create_new` | 词表未满且新名称代表新的运行语义，新增词项。 |
+| `merge_existing` | 词表已满或语义足够接近，合并到已有词项。 |
+| `exclude_non_runtime` | 统计、日志、trace、telemetry、原始副本等非运行字段，不进入主表征。 |
 
 ### 6.12 关键函数实现策略
 
@@ -1004,7 +756,7 @@ trim -> lower -> replace spaces/underscores with hyphen -> remove invalid chars 
 trim -> lower -> replace non-alnum with underscore -> collapse underscores
 ```
 
-`normalize_artifact_type`：
+`normalize_data_type`：
 
 ```text
 raw type
@@ -1014,23 +766,12 @@ raw type
   -> unknown + diagnostic if not supported
 ```
 
-`normalize_tags`：
-
-```text
-candidate tags
-  -> normalize token
-  -> remove empty tags
-  -> deduplicate
-  -> sort
-```
-
 `validate_representation`：
 
 ```text
 required fields
 outputs non-empty
-types in ArtifactType
-tags sorted and unique
+types in DataType
 source present
 body_sha256 present
 ```
@@ -1042,13 +783,13 @@ Normalizer 的测试不需要 LLM，直接喂固定的 `RawSkillManifest` 和 `E
 必须覆盖：
 
 1. ID slug 化。
-2. 参数名 snake_case 化。
-3. ArtifactType 同义词收敛。
-4. 输出名 snake_case 化。
-5. `skill_tags` 和 `data_tags` 轻量清洗、去重和排序。
+2. 参数名通过 `io_name_vocab` 收敛。
+3. DataType 同义词收敛。
+4. 输出名和输入名共用同一套 `io_name_vocab`。
+5. `raw` 和 `normalization` 不进入主表征，归一化过程进入 `NormalizationDecision`。
 6. 缺输入时生成默认 `input:text` 和 warning。
 7. 缺输出时生成 `result:unknown` 和 warning。
-8. 不支持类型时转 `unknown` 并保留原始值到 diagnostics。
+8. 不支持类型时转 `unknown` 并保留原始值到 diagnostics 和 decisions。
 9. 最终输出字段顺序和数组排序稳定。
 
 ## 7. 诊断设计
@@ -1089,9 +830,28 @@ missing_argument_hint
 default_input_created
 unknown_output_created
 low_extraction_confidence
-empty_skill_tags
-empty_data_tags
 unsupported_type_normalized
+```
+
+### 7.3 归一化决策日志
+
+`normalization_decisions.json` 记录每个 `name` 和 `type` 的归一化过程，不进入 `representations.json`。
+
+```json
+{
+  "skill_id": "aris-arxiv",
+  "path": "C:\\Users\\admin\\Documents\\data\\skills\\aris-arxiv",
+  "direction": "output",
+  "field": "name",
+  "raw_value": "Downloaded PDF",
+  "token": "downloaded_pdf",
+  "normalized_value": "paper",
+  "method": "vocab_alias",
+  "vocab": "io_name_vocab",
+  "vocab_version": "io-name-vocab-v1",
+  "confidence": 0.95,
+  "details": {}
+}
 ```
 
 ## 8. 错误策略
@@ -1114,12 +874,15 @@ unsupported_type_normalized
 skillmash/
   representation/
     __init__.py
-    scanner.py
-    manifest.py
-    context.py
     extractor.py
+    io_name_vocab.py
+    llm.py
+    manifest.py
+    models.py
     normalizer.py
-    diagnostics.py
+    pipeline.py
+    scanner.py
+    utils.py
     writer.py
 ```
 
@@ -1134,9 +897,11 @@ class RepresentationExtractor:
 class RepresentationExtractionResult:
     representations: list[SkillRepresentation]
     diagnostics: list[ExtractionDiagnostic]
+    normalization_decisions: list[NormalizationDecision]
+    io_name_vocab: dict
 ```
 
-图构建模块只依赖 `RepresentationExtractionResult.representations`，离线构建入口负责把 diagnostics 合并进最终 `diagnostics.json`。
+图构建模块只依赖 `RepresentationExtractionResult.representations`，离线构建入口负责把 diagnostics 合并进最终 `diagnostics.json`，把归一化证据写入 `normalization_decisions.json`，并保存最终 `io_name_vocab.json`。
 
 ## 10. 验收标准
 
@@ -1145,7 +910,7 @@ class RepresentationExtractionResult:
 1. 给定包含多个 `SKILL.md` 的目录，可以稳定输出 `SkillRepresentation[]`。
 2. 输出字段覆盖 `skills.json` 当前需要的 v1 字段。
 3. 相同输入、相同模型配置下，非 LLM 随机因素全部确定。
-4. 每个表征都有 `source.path`、`source.entry`、`source.relative_path` 和 `metadata.body_sha256`。
+4. 每个表征都有 `source.path`、`source.entry`、`source.relative_path` 和 `source.body_sha256`。
 5. LLM 输出非法时构建失败，并产生结构化诊断。
 6. 缺少 `argument-hint` 时可以生成默认输入，但必须有 warning。
 7. 无法判断输出时可以生成 `result:unknown`，但必须有 warning。

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Tuple
 
 import yaml
 
@@ -34,8 +34,8 @@ class SkillManifestParser:
         self,
         text: str,
         folder: SkillFolder,
-    ) -> tuple[dict[str, Any], str, list[ExtractionDiagnostic]]:
-        diagnostics: list[ExtractionDiagnostic] = []
+    ) -> Tuple[Dict[str, Any], str, List[ExtractionDiagnostic]]:
+        diagnostics: List[ExtractionDiagnostic] = []
         normalized = text.replace("\r\n", "\n").replace("\r", "\n")
         if not normalized.startswith("---\n"):
             return {}, normalized, diagnostics

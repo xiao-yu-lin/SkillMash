@@ -6,7 +6,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Union
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,7 @@ class LLMConfig:
     timeout_seconds: int = 60
 
     @classmethod
-    def from_env(cls, env_path: Path | str = ".env") -> "LLMConfig":
+    def from_env(cls, env_path: Union[Path, str] = ".env") -> "LLMConfig":
         values = _load_env_file(Path(env_path))
         merged = {**values, **os.environ}
 
@@ -83,7 +83,7 @@ def extract_message_content(message: Any) -> str:
         return content.strip()
 
     if isinstance(content, list):
-        parts: list[str] = []
+        parts: List[str] = []
         for item in content:
             if isinstance(item, str):
                 parts.append(item)
@@ -123,11 +123,11 @@ def safe_model_dump(value: Any) -> str:
     return text[:2000]
 
 
-def _load_env_file(path: Path) -> dict[str, str]:
+def _load_env_file(path: Path) -> Dict[str, str]:
     if not path.exists():
         return {}
 
-    values: dict[str, str] = {}
+    values: Dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or "=" not in stripped:

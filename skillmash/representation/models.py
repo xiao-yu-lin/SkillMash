@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Union
 
 
 @dataclass(frozen=True)
@@ -25,11 +25,11 @@ class ExtractionDiagnostic:
     severity: str
     code: str
     message: str
-    skill_id: str | None = None
-    path: str | None = None
-    details: dict[str, Any] = field(default_factory=dict)
+    skill_id: Optional[str] = None
+    path: Optional[str] = None
+    details: Dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "skill_id": self.skill_id,
             "path": self.path,
@@ -46,10 +46,10 @@ class RawSkillManifest:
     """Parsed SKILL.md content before LLM schema extraction."""
 
     folder: SkillFolder
-    frontmatter: dict[str, Any]
+    frontmatter: Dict[str, Any]
     body: str
     body_sha256: str
-    diagnostics: list[ExtractionDiagnostic] = field(default_factory=list)
+    diagnostics: List[ExtractionDiagnostic] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -61,9 +61,9 @@ class ParameterSpec:
     required: bool = True
     description: str = ""
     default: Any = None
-    schema_ref: str | None = None
+    schema_ref: Optional[str] = None
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "type": self.type,
@@ -81,9 +81,9 @@ class ArtifactSpec:
     name: str
     type: str
     description: str = ""
-    schema_ref: str | None = None
+    schema_ref: Optional[str] = None
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "type": self.type,
@@ -100,7 +100,7 @@ class Condition:
     expression: str
     description: str = ""
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "type": self.type,
             "expression": self.expression,
@@ -113,13 +113,14 @@ class ExtractedSkillSchema:
     """LLM-extracted candidate schema before deterministic normalization."""
 
     description: str = ""
-    inputs: list[ParameterSpec | dict[str, Any]] = field(default_factory=list)
-    outputs: list[ArtifactSpec | dict[str, Any]] = field(default_factory=list)
-    constraints: list[str] = field(default_factory=list)
-    preconditions: list[Condition | dict[str, Any]] = field(default_factory=list)
-    postconditions: list[Condition | dict[str, Any]] = field(default_factory=list)
-    confidence: float | None = None
-    warnings: list[str] = field(default_factory=list)
+    tasks: List[str] = field(default_factory=list)
+    inputs: List[Union[ParameterSpec, Dict[str, Any]]] = field(default_factory=list)
+    outputs: List[Union[ArtifactSpec, Dict[str, Any]]] = field(default_factory=list)
+    constraints: List[str] = field(default_factory=list)
+    preconditions: List[Union[Condition, Dict[str, Any]]] = field(default_factory=list)
+    postconditions: List[Union[Condition, Dict[str, Any]]] = field(default_factory=list)
+    confidence: Optional[float] = None
+    warnings: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -128,27 +129,25 @@ class SkillRepresentation:
 
     id: str
     name: str
-    kind: str
     description: str
     version: str
-    inputs: list[ParameterSpec]
-    outputs: list[ArtifactSpec]
-    preconditions: list[Condition]
-    postconditions: list[Condition]
-    source: dict[str, Any]
+    tasks: List[str]
+    inputs: List[ParameterSpec]
+    outputs: List[ArtifactSpec]
+    preconditions: List[Condition]
+    postconditions: List[Condition]
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
             "name": self.name,
-            "kind": self.kind,
             "description": self.description,
             "version": self.version,
+            "tasks": list(self.tasks),
             "inputs": [item.to_dict() for item in self.inputs],
             "outputs": [item.to_dict() for item in self.outputs],
             "preconditions": [item.to_dict() for item in self.preconditions],
             "postconditions": [item.to_dict() for item in self.postconditions],
-            "source": self.source,
         }
 
 
@@ -173,14 +172,18 @@ class NormalizationConfig:
     # I/O name 动态词表版本；name 表达语义角色，例如 query、paper、summary。
     io_name_vocab_version: str = "io-name-vocab-v1"
 
+    # Dynamic vocabulary for normalized Skill task/capability terms.
+    task_vocab_version: str = "task-vocab-v1"
+
     # 数据形态词表版本；type 表达传递格式或载体，例如 text、pdf、csv。
     data_type_vocab_version: str = "data-type-v1"
 
     # io_name_vocab 的词表容量上限；达到上限后，新 name 必须合并到已有词项或被排除。
     max_vocab_size: int = 8
 
-    # Skill kind 缺省值；当前阶段默认把 Skill 视为外部包装能力。
-    default_kind: str = "wrapped"
+    # task_vocab has its own capacity so graph-facing capability terms can grow
+    # independently from I/O role names.
+    max_task_vocab_size: int = 32
 
     # Skill version 缺省值；当 frontmatter 没有声明版本时使用。
     default_version: str = "1.0.0"
@@ -199,7 +202,7 @@ class NormalizationConfig:
 
     # 受控 DataType 词表：只描述数据传递形态，不描述业务语义。
     # 例如论文 PDF 表示为 name=paper、type=pdf，而不是 type=paper。
-    data_type_vocab: frozenset[str] = frozenset(
+    data_type_vocab: frozenset = frozenset(
         {
             "text",
             "markdown",
@@ -224,7 +227,7 @@ class NormalizationConfig:
 
     # DataType 同义词表：把 LLM 或旧数据里的自由文本类型收敛到 data_type_vocab。
     # 这里处理的是形态归一化，例如 paper -> pdf、spreadsheet -> csv。
-    data_type_aliases: dict[str, str] = field(
+    data_type_aliases: Dict[str, str] = field(
         default_factory=lambda: {
             "natural_language": "text",
             "natural_language_query": "text",
@@ -258,7 +261,7 @@ class NormalizationConfig:
 
     # I/O name 同义词表：把输入输出 name 收敛到图构建使用的语义词项。
     # 这张表是动态 io_name_vocab 的当前内置种子；后续可由 LLM 自动扩展。
-    io_name_aliases: dict[str, str] = field(
+    io_name_aliases: Dict[str, str] = field(
         default_factory=lambda: {
             "natural_language_query": "query",
             "search_query": "query",
@@ -286,13 +289,43 @@ class NormalizationConfig:
         }
     )
 
+    # Seed task/capability aliases. These are semantic actions used for
+    # retrieval and planning, not data carriers.
+    task_aliases: Dict[str, str] = field(
+        default_factory=lambda: {
+            "web_search": "search",
+            "search_web": "search",
+            "find": "search",
+            "lookup": "search",
+            "research": "search",
+            "summarise": "summarize",
+            "summarisation": "summarize",
+            "summarization": "summarize",
+            "summary": "summarize",
+            "translate_text": "translate",
+            "translation": "translate",
+            "extract_data": "extract",
+            "data_extraction": "extract",
+            "parse": "extract",
+            "analyze_data": "analyze",
+            "analysis": "analyze",
+            "generate_report": "write",
+            "write_report": "write",
+            "draft": "write",
+            "create": "generate",
+            "render": "generate",
+            "convert_format": "convert",
+            "format_conversion": "convert",
+        }
+    )
+
 
 @dataclass(frozen=True)
 class NormalizationDecision:
     """Trace record for a normalization choice kept outside representations."""
 
     skill_id: str
-    path: str | None
+    path: Optional[str]
     direction: str
     field: str
     raw_value: str
@@ -302,9 +335,9 @@ class NormalizationDecision:
     vocab: str
     vocab_version: str
     confidence: float
-    details: dict[str, Any] = field(default_factory=dict)
+    details: Dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "skill_id": self.skill_id,
             "path": self.path,
@@ -324,16 +357,17 @@ class NormalizationDecision:
 @dataclass(frozen=True)
 class NormalizationResult:
     representation: SkillRepresentation
-    diagnostics: list[ExtractionDiagnostic]
-    decisions: list[NormalizationDecision] = field(default_factory=list)
+    diagnostics: List[ExtractionDiagnostic]
+    decisions: List[NormalizationDecision] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class RepresentationExtractionResult:
-    representations: list[SkillRepresentation]
-    diagnostics: list[ExtractionDiagnostic]
-    normalization_decisions: list[NormalizationDecision] = field(default_factory=list)
-    io_name_vocab: dict[str, Any] = field(default_factory=dict)
+    representations: List[SkillRepresentation]
+    diagnostics: List[ExtractionDiagnostic]
+    normalization_decisions: List[NormalizationDecision] = field(default_factory=list)
+    io_name_vocab: Dict[str, Any] = field(default_factory=dict)
+    task_vocab: Dict[str, Any] = field(default_factory=dict)
 
 
 class SkillSchemaExtractor(Protocol):

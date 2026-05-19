@@ -32,6 +32,14 @@ from skillmash.representation.models import (
 from skillmash.representation.normalizer import SkillRepresentationNormalizer
 from skillmash.representation.pipeline import RepresentationExtractor
 from skillmash.representation.scanner import SkillFolderScanner
+from skillmash.representation.semantic_vocab import (
+    HeuristicSemanticResolver,
+    SemanticCandidate,
+    SemanticResolution,
+    SemanticResolver,
+    SemanticVocabTerm,
+    SemanticVocabulary,
+)
 from skillmash.representation.writer import write_extraction_result
 
 __all__ = [
@@ -40,6 +48,7 @@ __all__ = [
     "ExtractedSkillSchema",
     "ExtractionDiagnostic",
     "HeuristicIONameResolver",
+    "HeuristicSemanticResolver",
     "IONameCandidate",
     "IONameResolution",
     "IONameResolver",
@@ -55,6 +64,11 @@ __all__ = [
     "RawSkillManifest",
     "RepresentationExtractionResult",
     "RepresentationExtractor",
+    "SemanticCandidate",
+    "SemanticResolution",
+    "SemanticResolver",
+    "SemanticVocabTerm",
+    "SemanticVocabulary",
     "SkillFolder",
     "SkillFolderScanner",
     "SkillManifestParser",

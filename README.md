@@ -20,6 +20,7 @@ skills_root/
 -> diagnostics.json
 -> normalization_decisions.json
 -> io_name_vocab.json
+-> task_vocab.json
 -> extraction.log
 ```
 
@@ -29,6 +30,7 @@ The first version prioritizes:
 - folder scanning and `SKILL.md` frontmatter parsing
 - OpenAI-compatible LLM extraction
 - dynamic input/output `name` normalization through `io_name_vocab`
+- dynamic Skill capability normalization through `task_vocab`
 - shared input/output data representation `type` normalization
 - structured diagnostics, progress, and logs
 
@@ -94,6 +96,7 @@ OUTPUT/
   diagnostics.json
   normalization_decisions.json
   io_name_vocab.json
+  task_vocab.json
   extraction.log
 ```
 
@@ -109,8 +112,9 @@ Progress is printed to `stderr` as a small progress bar. A JSON summary is print
     {
       "id": "aris-arxiv",
       "name": "Aris Arxiv",
-      "kind": "wrapped",
       "description": "Search, download, and summarize academic papers from arXiv.",
+      "version": "1.0.0",
+      "tasks": ["search", "summarize"],
       "inputs": [
         {
           "name": "query",
@@ -129,7 +133,8 @@ Progress is printed to `stderr` as a small progress bar. A JSON summary is print
           "schema_ref": null
         }
       ],
-      "source": {}
+      "preconditions": [],
+      "postconditions": []
     }
   ]
 }
@@ -144,7 +149,7 @@ natural language query  -> text
 pdf                     -> pdf
 ```
 
-Normalization decisions are written separately to `normalization_decisions.json` so graph-facing representations stay compact and stable. The final dynamic input/output name vocabulary is written to `io_name_vocab.json`.
+Normalization decisions are written separately to `normalization_decisions.json` so graph-facing representations stay compact and stable. The final dynamic input/output name vocabulary is written to `io_name_vocab.json`, and the final dynamic task vocabulary is written to `task_vocab.json`.
 
 When a new I/O name is not already in `io_name_vocab`, the resolver chooses one of:
 
@@ -197,4 +202,4 @@ tests/
 
 ## Design Notes
 
-The representation module is intentionally independent of graph construction and online orchestration. It produces stable `SkillRepresentation` records; later stages should consume those records instead of rereading `SKILL.md`.
+The representation module is intentionally independent of graph construction and online orchestration. It produces stable `SkillRepresentation` records and compact dynamic vocabularies for graph-facing semantic fields; later stages should consume those records instead of rereading `SKILL.md`.

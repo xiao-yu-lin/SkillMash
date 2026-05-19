@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import List, Optional, Union
 
 from skillmash.representation.models import SkillFolder
 
@@ -10,14 +11,18 @@ from skillmash.representation.models import SkillFolder
 class SkillFolderScanner:
     """Find folders that contain a SKILL.md entrypoint."""
 
-    def scan(self, skills_root: Path | str, max_depth: int | None = None) -> list[SkillFolder]:
+    def scan(
+        self,
+        skills_root: Union[Path, str],
+        max_depth: Optional[int] = None,
+    ) -> List[SkillFolder]:
         root = Path(skills_root).resolve()
         if not root.exists():
             raise FileNotFoundError(f"skills_root does not exist: {root}")
         if not root.is_dir():
             raise NotADirectoryError(f"skills_root is not a directory: {root}")
 
-        folders: list[SkillFolder] = []
+        folders: List[SkillFolder] = []
         for entry in sorted(root.rglob("SKILL.md"), key=lambda path: path.as_posix().lower()):
             folder_path = entry.parent
             relative_path = folder_path.relative_to(root).as_posix()

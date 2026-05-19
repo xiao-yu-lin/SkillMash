@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Dict, List, Optional, Union
 
 from skillmash.representation.manifest import SkillManifestParser
 from skillmash.representation.models import (
@@ -25,10 +25,10 @@ class RepresentationExtractor:
     def __init__(
         self,
         schema_extractor: SkillSchemaExtractor,
-        scanner: SkillFolderScanner | None = None,
-        parser: SkillManifestParser | None = None,
-        normalizer: SkillRepresentationNormalizer | None = None,
-        progress: ProgressCallback | None = None,
+        scanner: Optional[SkillFolderScanner] = None,
+        parser: Optional[SkillManifestParser] = None,
+        normalizer: Optional[SkillRepresentationNormalizer] = None,
+        progress: Optional[ProgressCallback] = None,
         max_workers: int = 1,
     ) -> None:
         self.schema_extractor = schema_extractor
@@ -38,10 +38,10 @@ class RepresentationExtractor:
         self.progress = progress
         self.max_workers = max(1, max_workers)
 
-    def extract_all(self, skills_root: Path | str) -> RepresentationExtractionResult:
-        representations_by_index = {}
-        diagnostics: list[ExtractionDiagnostic] = []
-        normalization_decisions: list[NormalizationDecision] = []
+    def extract_all(self, skills_root: Union[Path, str]) -> RepresentationExtractionResult:
+        representations_by_index: Dict[int, object] = {}
+        diagnostics: List[ExtractionDiagnostic] = []
+        normalization_decisions: List[NormalizationDecision] = []
 
         folders = self.scanner.scan(skills_root)
         total = len(folders)
@@ -60,6 +60,7 @@ class RepresentationExtractor:
                 diagnostics=diagnostics,
                 normalization_decisions=normalization_decisions,
                 io_name_vocab=self.normalizer.io_name_vocabulary.to_dict(),
+                task_vocab=self.normalizer.task_vocabulary.to_dict(),
             )
 
         completed = 0
@@ -84,6 +85,7 @@ class RepresentationExtractor:
             diagnostics=diagnostics,
             normalization_decisions=normalization_decisions,
             io_name_vocab=self.normalizer.io_name_vocabulary.to_dict(),
+            task_vocab=self.normalizer.task_vocabulary.to_dict(),
         )
 
     def _process_folder(self, index: int, folder, total: int):

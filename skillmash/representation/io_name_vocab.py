@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 from threading import RLock
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Union
 
 from skillmash.representation.llm import (
     LLMConfig,
@@ -26,9 +26,9 @@ class IONameCandidate:
     data_type: str
     description: str
     skill_id: str
-    path: str | None = None
+    path: Optional[str] = None
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "raw_name": self.raw_name,
             "token": self.token,
@@ -43,7 +43,7 @@ class IONameCandidate:
 @dataclass(frozen=True)
 class IONameResolution:
     action: str
-    normalized_name: str | None
+    normalized_name: Optional[str]
     confidence: float
     reason: str = ""
     forced_merge: bool = False
@@ -61,13 +61,13 @@ class IONameResolver(Protocol):
 @dataclass
 class IONameVocabTerm:
     name: str
-    aliases: set[str] = field(default_factory=set)
+    aliases: Set[str] = field(default_factory=set)
     definition: str = ""
-    allowed_types: set[str] = field(default_factory=set)
-    examples: list[str] = field(default_factory=list)
+    allowed_types: Set[str] = field(default_factory=set)
+    examples: List[str] = field(default_factory=list)
     count: int = 0
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "definition": self.definition,
@@ -78,7 +78,7 @@ class IONameVocabTerm:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "IONameVocabTerm":
+    def from_dict(cls, data: Dict[str, Any]) -> "IONameVocabTerm":
         name = str(data.get("name") or "").strip()
         aliases = {str(alias).strip() for alias in data.get("aliases", []) if str(alias).strip()}
         allowed_types = {
@@ -104,19 +104,19 @@ class IONameVocabulary:
         *,
         version: str,
         max_vocab_size: int,
-        terms: list[IONameVocabTerm] | None = None,
+        terms: Optional[List[IONameVocabTerm]] = None,
     ) -> None:
         self.version = version
         self.max_vocab_size = max(1, max_vocab_size)
-        self._terms: dict[str, IONameVocabTerm] = {}
-        self._aliases: dict[str, str] = {}
+        self._terms: Dict[str, IONameVocabTerm] = {}
+        self._aliases: Dict[str, str] = {}
         self._lock = RLock()
         for term in terms or []:
             self.add_term(term)
 
     @classmethod
     def from_config(cls, config: NormalizationConfig) -> "IONameVocabulary":
-        terms: dict[str, IONameVocabTerm] = {}
+        terms: Dict[str, IONameVocabTerm] = {}
         for alias, name in config.io_name_aliases.items():
             term = terms.setdefault(name, IONameVocabTerm(name=name))
             term.aliases.add(alias)
@@ -131,7 +131,7 @@ class IONameVocabulary:
     @classmethod
     def from_dict(
         cls,
-        data: dict[str, Any],
+        data: Dict[str, Any],
         config: NormalizationConfig,
     ) -> "IONameVocabulary":
         return cls(
@@ -147,13 +147,13 @@ class IONameVocabulary:
     @classmethod
     def load(
         cls,
-        path: Path | str,
+        path: Union[Path, str],
         config: NormalizationConfig,
     ) -> "IONameVocabulary":
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls.from_dict(data, config)
 
-    def save(self, path: Path | str) -> None:
+    def save(self, path: Union[Path, str]) -> None:
         Path(path).write_text(
             json.dumps(self.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -169,7 +169,7 @@ class IONameVocabulary:
                 if alias:
                     self._aliases[alias] = term.name
 
-    def lookup(self, token: str) -> str | None:
+    def lookup(self, token: str) -> Optional[str]:
         with self._lock:
             return self._aliases.get(token)
 
@@ -180,7 +180,7 @@ class IONameVocabulary:
     def is_full(self) -> bool:
         return self.size() >= self.max_vocab_size
 
-    def term_names(self) -> list[str]:
+    def term_names(self) -> List[str]:
         with self._lock:
             return sorted(self._terms)
 
@@ -231,7 +231,7 @@ class IONameVocabulary:
             term.count += 1
             return name
 
-    def closest_term(self, token: str) -> str | None:
+    def closest_term(self, token: str) -> Optional[str]:
         with self._lock:
             if not self._terms:
                 return None
@@ -240,7 +240,7 @@ class IONameVocabulary:
                 key=lambda name: _term_similarity(token, name),
             )
 
-    def resolver_context(self) -> dict[str, Any]:
+    def resolver_context(self) -> Dict[str, Any]:
         with self._lock:
             return {
                 "version": self.version,
@@ -252,7 +252,7 @@ class IONameVocabulary:
                 ],
             }
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         with self._lock:
             return {
                 "version": self.version,
@@ -324,7 +324,7 @@ class OpenAICompatibleIONameResolver:
     def __init__(
         self,
         config: LLMConfig,
-        progress: Callable[[str, IONameCandidate, IONameResolution | None], None] | None = None,
+        progress: Optional[Callable[[str, IONameCandidate, Optional[IONameResolution]], None]] = None,
     ) -> None:
         self.config = config
         self.client = create_openai_client(config)
@@ -396,14 +396,14 @@ class OpenAICompatibleIONameResolver:
         self,
         stage: str,
         candidate: IONameCandidate,
-        resolution: IONameResolution | None,
+        resolution: Optional[IONameResolution],
     ) -> None:
         if self.progress is not None:
             self.progress(stage, candidate, resolution)
 
 
 def _resolution_from_payload(
-    payload: dict[str, Any],
+    payload: Dict[str, Any],
     vocabulary: IONameVocabulary,
 ) -> IONameResolution:
     action = str(payload.get("action") or "merge_existing")

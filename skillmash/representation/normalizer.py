@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from skillmash.representation.io_name_vocab import (
     HeuristicIONameResolver,
@@ -24,6 +24,13 @@ from skillmash.representation.models import (
     RawSkillManifest,
     SkillRepresentation,
 )
+from skillmash.representation.semantic_vocab import (
+    HeuristicSemanticResolver,
+    SemanticCandidate,
+    SemanticResolver,
+    SemanticResolution,
+    SemanticVocabulary,
+)
 from skillmash.representation.utils import (
     normalize_human_name,
     normalize_parameter_name,
@@ -37,7 +44,6 @@ from skillmash.representation.utils import (
 class _Identity:
     id: str
     name: str
-    kind: str
     description: str
     version: str
 
@@ -47,9 +53,11 @@ class SkillRepresentationNormalizer:
 
     def __init__(
         self,
-        config: NormalizationConfig | None = None,
-        io_name_vocabulary: IONameVocabulary | None = None,
-        io_name_resolver: IONameResolver | None = None,
+        config: Optional[NormalizationConfig] = None,
+        io_name_vocabulary: Optional[IONameVocabulary] = None,
+        io_name_resolver: Optional[IONameResolver] = None,
+        task_vocabulary: Optional[SemanticVocabulary] = None,
+        task_resolver: Optional[SemanticResolver] = None,
     ) -> None:
         self.config = config or NormalizationConfig()
         self.io_name_vocabulary = (
@@ -57,6 +65,15 @@ class SkillRepresentationNormalizer:
             or IONameVocabulary.from_config(self.config)
         )
         self.io_name_resolver = io_name_resolver or HeuristicIONameResolver()
+        self.task_vocabulary = (
+            task_vocabulary
+            or SemanticVocabulary.from_aliases(
+                version=self.config.task_vocab_version,
+                max_vocab_size=self.config.max_task_vocab_size,
+                aliases=self.config.task_aliases,
+            )
+        )
+        self.task_resolver = task_resolver or HeuristicSemanticResolver()
 
     def normalize(
         self,
@@ -64,9 +81,16 @@ class SkillRepresentationNormalizer:
         extracted: ExtractedSkillSchema,
     ) -> NormalizationResult:
         diagnostics = list(manifest.diagnostics)
-        decisions: list[NormalizationDecision] = []
+        decisions: List[NormalizationDecision] = []
 
         identity = self._normalize_identity(manifest, extracted)
+        tasks = self._normalize_tasks(
+            extracted.tasks,
+            manifest,
+            identity.id,
+            identity.description,
+            decisions,
+        )
         inputs = self._normalize_inputs(
             extracted.inputs,
             manifest,
@@ -83,21 +107,19 @@ class SkillRepresentationNormalizer:
         )
         preconditions = self._normalize_conditions(extracted.preconditions)
         postconditions = self._normalize_conditions(extracted.postconditions)
-        source = self._build_source(manifest)
 
         representation = SkillRepresentation(
             id=identity.id,
             name=identity.name,
-            kind=identity.kind,
             description=identity.description,
             version=identity.version,
+            tasks=tasks,
             inputs=inputs,
             outputs=outputs,
             preconditions=preconditions,
             postconditions=postconditions,
-            source=source,
         )
-        self._validate(representation, diagnostics)
+        self._validate(representation, manifest, diagnostics)
         return NormalizationResult(
             representation=representation,
             diagnostics=diagnostics,
@@ -113,7 +135,6 @@ class SkillRepresentationNormalizer:
         raw_name = str(frontmatter.get("name") or manifest.folder.id_hint)
         skill_id = normalize_slug(raw_name) or normalize_slug(manifest.folder.relative_path)
         name = normalize_human_name(raw_name) or skill_id
-        kind = str(frontmatter.get("kind") or self.config.default_kind).strip().lower()
         version = str(
             frontmatter.get("version")
             or self.config.default_version
@@ -122,19 +143,49 @@ class SkillRepresentationNormalizer:
         return _Identity(
             id=skill_id,
             name=name,
-            kind=kind,
             description=description,
             version=version,
         )
 
-    def _normalize_inputs(
+    def _normalize_tasks(
         self,
-        raw_inputs: list[ParameterSpec | dict[str, Any]],
+        raw_tasks: List[str],
         manifest: RawSkillManifest,
         skill_id: str,
-        diagnostics: list[ExtractionDiagnostic],
-        decisions: list[NormalizationDecision],
-    ) -> list[ParameterSpec]:
+        description: str,
+        decisions: List[NormalizationDecision],
+    ) -> List[str]:
+        tasks: List[str] = []
+        seen: set = set()
+        for raw_task in raw_tasks:
+            raw_value = str(raw_task or "").strip()
+            if not raw_value:
+                continue
+            task = self._normalize_semantic_vocab_value(
+                raw_value,
+                description,
+                manifest,
+                skill_id,
+                field="tasks",
+                vocab_name="task_vocab",
+                vocabulary=self.task_vocabulary,
+                resolver=self.task_resolver,
+                decisions=decisions,
+            )
+            if task is None or task in seen:
+                continue
+            tasks.append(task)
+            seen.add(task)
+        return tasks
+
+    def _normalize_inputs(
+        self,
+        raw_inputs: List[Union[ParameterSpec, Dict[str, Any]]],
+        manifest: RawSkillManifest,
+        skill_id: str,
+        diagnostics: List[ExtractionDiagnostic],
+        decisions: List[NormalizationDecision],
+    ) -> List[ParameterSpec]:
         if not raw_inputs:
             diagnostics.append(
                 ExtractionDiagnostic(
@@ -185,7 +236,7 @@ class SkillRepresentationNormalizer:
                 )
             ]
 
-        inputs: list[ParameterSpec] = []
+        inputs: List[ParameterSpec] = []
         for raw in raw_inputs:
             data = to_dict(raw)
             raw_type = str(data.get("type") or self.config.default_input_type)
@@ -223,12 +274,12 @@ class SkillRepresentationNormalizer:
 
     def _normalize_outputs(
         self,
-        raw_outputs: list[ArtifactSpec | dict[str, Any]],
+        raw_outputs: List[Union[ArtifactSpec, Dict[str, Any]]],
         manifest: RawSkillManifest,
         skill_id: str,
-        diagnostics: list[ExtractionDiagnostic],
-        decisions: list[NormalizationDecision],
-    ) -> list[ArtifactSpec]:
+        diagnostics: List[ExtractionDiagnostic],
+        decisions: List[NormalizationDecision],
+    ) -> List[ArtifactSpec]:
         if not raw_outputs:
             diagnostics.append(
                 ExtractionDiagnostic(
@@ -277,7 +328,7 @@ class SkillRepresentationNormalizer:
                 )
             ]
 
-        outputs: list[ArtifactSpec] = []
+        outputs: List[ArtifactSpec] = []
         for raw in raw_outputs:
             data = to_dict(raw)
             raw_type = str(data.get("type") or self.config.unknown_type)
@@ -313,13 +364,13 @@ class SkillRepresentationNormalizer:
 
     def _deduplicate_inputs(
         self,
-        inputs: list[ParameterSpec],
+        inputs: List[ParameterSpec],
         manifest: RawSkillManifest,
         skill_id: str,
-        diagnostics: list[ExtractionDiagnostic],
-    ) -> list[ParameterSpec]:
-        merged: list[ParameterSpec] = []
-        by_name: dict[str, int] = {}
+        diagnostics: List[ExtractionDiagnostic],
+    ) -> List[ParameterSpec]:
+        merged: List[ParameterSpec] = []
+        by_name: Dict[str, int] = {}
         for item in inputs:
             existing_index = by_name.get(item.name)
             if existing_index is None:
@@ -349,13 +400,13 @@ class SkillRepresentationNormalizer:
 
     def _deduplicate_outputs(
         self,
-        outputs: list[ArtifactSpec],
+        outputs: List[ArtifactSpec],
         manifest: RawSkillManifest,
         skill_id: str,
-        diagnostics: list[ExtractionDiagnostic],
-    ) -> list[ArtifactSpec]:
-        merged: list[ArtifactSpec] = []
-        by_name: dict[str, int] = {}
+        diagnostics: List[ExtractionDiagnostic],
+    ) -> List[ArtifactSpec]:
+        merged: List[ArtifactSpec] = []
+        by_name: Dict[str, int] = {}
         for item in outputs:
             existing_index = by_name.get(item.name)
             if existing_index is None:
@@ -387,7 +438,7 @@ class SkillRepresentationNormalizer:
         self,
         existing: ParameterSpec,
         incoming: ParameterSpec,
-    ) -> tuple[ParameterSpec, dict[str, Any]]:
+    ) -> Tuple[ParameterSpec, Dict[str, Any]]:
         merged_type, details = self._merge_type(existing.type, incoming.type)
         default, default_conflict = self._merge_optional_value(
             existing.default,
@@ -423,7 +474,7 @@ class SkillRepresentationNormalizer:
         self,
         existing: ArtifactSpec,
         incoming: ArtifactSpec,
-    ) -> tuple[ArtifactSpec, dict[str, Any]]:
+    ) -> Tuple[ArtifactSpec, Dict[str, Any]]:
         merged_type, details = self._merge_type(existing.type, incoming.type)
         schema_ref, schema_ref_conflict = self._merge_optional_value(
             existing.schema_ref,
@@ -443,7 +494,7 @@ class SkillRepresentationNormalizer:
             details,
         )
 
-    def _merge_type(self, existing: str, incoming: str) -> tuple[str, dict[str, Any]]:
+    def _merge_type(self, existing: str, incoming: str) -> Tuple[str, Dict[str, Any]]:
         if existing == incoming:
             return existing, {"type_conflict": False, "type_values": [existing]}
         if existing == self.config.unknown_type:
@@ -460,7 +511,7 @@ class SkillRepresentationNormalizer:
         self,
         existing: Any,
         incoming: Any,
-    ) -> tuple[Any, bool]:
+    ) -> Tuple[Any, bool]:
         if existing in (None, ""):
             return incoming, False
         if incoming in (None, "") or incoming == existing:
@@ -468,8 +519,8 @@ class SkillRepresentationNormalizer:
         return existing, True
 
     def _merge_description(self, existing: str, incoming: str) -> str:
-        parts: list[str] = []
-        seen: set[str] = set()
+        parts: List[str] = []
+        seen: set = set()
         for value in [existing, incoming]:
             text = str(value or "").strip()
             if not text or text in seen:
@@ -486,8 +537,8 @@ class SkillRepresentationNormalizer:
         manifest: RawSkillManifest,
         skill_id: str,
         direction: str,
-        decisions: list[NormalizationDecision],
-    ) -> str | None:
+        decisions: List[NormalizationDecision],
+    ) -> Optional[str]:
         token = normalize_parameter_name(raw_name)
         existing = self.io_name_vocabulary.lookup(token)
         if existing is not None:
@@ -550,7 +601,7 @@ class SkillRepresentationNormalizer:
         raw_type: str,
         description: str,
         resolution: IONameResolution,
-    ) -> str | None:
+    ) -> Optional[str]:
         if resolution.action == "exclude_non_runtime":
             return None
 
@@ -580,14 +631,107 @@ class SkillRepresentationNormalizer:
         )
         return target
 
+    def _normalize_semantic_vocab_value(
+        self,
+        raw_value: str,
+        description: str,
+        manifest: RawSkillManifest,
+        skill_id: str,
+        *,
+        field: str,
+        vocab_name: str,
+        vocabulary: SemanticVocabulary,
+        resolver: SemanticResolver,
+        decisions: List[NormalizationDecision],
+    ) -> Optional[str]:
+        token = normalize_parameter_name(raw_value)
+        existing = vocabulary.lookup(token)
+        if existing is not None:
+            method = "vocab_alias" if existing != token else "vocab_exact"
+            confidence = 0.95 if existing != token else 1.0
+            self._record_decision(
+                decisions,
+                skill_id=skill_id,
+                path=str(manifest.folder.path),
+                direction="skill",
+                field=field,
+                raw_value=raw_value,
+                token=token,
+                normalized_value=existing,
+                method=method,
+                vocab=vocab_name,
+                vocab_version=vocabulary.version,
+                confidence=confidence,
+            )
+            return existing
+
+        resolution = resolver.resolve(
+            SemanticCandidate(
+                raw_value=raw_value,
+                token=token,
+                field=field,
+                description=description,
+                skill_id=skill_id,
+                path=str(manifest.folder.path),
+            ),
+            vocabulary,
+        )
+        normalized = self._apply_semantic_resolution(token, description, resolution, vocabulary)
+        self._record_decision(
+            decisions,
+            skill_id=skill_id,
+            path=str(manifest.folder.path),
+            direction="skill",
+            field=field,
+            raw_value=raw_value,
+            token=token,
+            normalized_value=normalized or "",
+            method=resolution.action,
+            vocab=vocab_name,
+            vocab_version=vocabulary.version,
+            confidence=resolution.confidence,
+            details={
+                "reason": resolution.reason,
+                "forced_merge": resolution.forced_merge,
+                "vocab_size": vocabulary.size(),
+                "max_vocab_size": vocabulary.max_vocab_size,
+            },
+        )
+        return normalized
+
+    def _apply_semantic_resolution(
+        self,
+        token: str,
+        description: str,
+        resolution: SemanticResolution,
+        vocabulary: SemanticVocabulary,
+    ) -> Optional[str]:
+        if resolution.action == "exclude_non_runtime":
+            return None
+
+        if resolution.action == "create_new" and not vocabulary.is_full():
+            return vocabulary.create_term(
+                resolution.normalized_value or token,
+                alias=token,
+                example=description,
+            )
+
+        target = resolution.normalized_value or vocabulary.closest_term(token)
+        if target is None:
+            return vocabulary.create_term(token, alias=token, example=description)
+        if target not in vocabulary.term_names():
+            target = vocabulary.closest_term(target) or target
+        vocabulary.add_alias(token, target, example=description)
+        return target
+
     def _normalize_data_type(
         self,
         raw_type: str,
         manifest: RawSkillManifest,
         skill_id: str,
         direction: str,
-        diagnostics: list[ExtractionDiagnostic],
-        decisions: list[NormalizationDecision],
+        diagnostics: List[ExtractionDiagnostic],
+        decisions: List[NormalizationDecision],
     ) -> str:
         token = normalize_token(raw_type)
         normalized = self.config.data_type_aliases.get(token, token)
@@ -637,10 +781,10 @@ class SkillRepresentationNormalizer:
 
     def _record_decision(
         self,
-        decisions: list[NormalizationDecision],
+        decisions: List[NormalizationDecision],
         *,
         skill_id: str,
-        path: str | None,
+        path: Optional[str],
         direction: str,
         field: str,
         raw_value: str,
@@ -650,7 +794,7 @@ class SkillRepresentationNormalizer:
         vocab: str,
         vocab_version: str,
         confidence: float,
-        details: dict[str, Any] | None = None,
+        details: Optional[Dict[str, Any]] = None,
     ) -> None:
         decisions.append(
             NormalizationDecision(
@@ -669,8 +813,10 @@ class SkillRepresentationNormalizer:
             )
         )
 
-    def _normalize_conditions(self, conditions: list[Condition | dict[str, Any]]) -> list[Condition]:
-        normalized: list[Condition] = []
+    def _normalize_conditions(
+        self, conditions: List[Union[Condition, Dict[str, Any]]]
+    ) -> List[Condition]:
+        normalized: List[Condition] = []
         for raw in conditions:
             data = to_dict(raw)
             condition_type = normalize_token(str(data.get("type") or "constraint"))
@@ -686,19 +832,11 @@ class SkillRepresentationNormalizer:
             )
         return normalized
 
-    def _build_source(self, manifest: RawSkillManifest) -> dict[str, Any]:
-        return {
-            "type": "folder",
-            "path": str(manifest.folder.path),
-            "entry": str(manifest.folder.entry),
-            "relative_path": manifest.folder.relative_path,
-            "body_sha256": manifest.body_sha256,
-        }
-
     def _validate(
         self,
         representation: SkillRepresentation,
-        diagnostics: list[ExtractionDiagnostic],
+        manifest: RawSkillManifest,
+        diagnostics: List[ExtractionDiagnostic],
     ) -> None:
         if not representation.outputs:
             diagnostics.append(
@@ -708,7 +846,7 @@ class SkillRepresentationNormalizer:
                     code="schema_validation_failed",
                     message="outputs must not be empty",
                     skill_id=representation.id,
-                    path=representation.source.get("path"),
+                    path=str(manifest.folder.path),
                 )
             )
         for item in [*representation.inputs, *representation.outputs]:
@@ -720,18 +858,7 @@ class SkillRepresentationNormalizer:
                         code="schema_validation_failed",
                         message="type is outside DataType vocabulary",
                         skill_id=representation.id,
-                        path=representation.source.get("path"),
+                        path=str(manifest.folder.path),
                         details={"type": item.type},
                     )
                 )
-        if not representation.source.get("body_sha256"):
-            diagnostics.append(
-                ExtractionDiagnostic(
-                    stage="normalization",
-                    severity="error",
-                    code="schema_validation_failed",
-                    message="source.body_sha256 is required",
-                    skill_id=representation.id,
-                    path=representation.source.get("path"),
-                )
-            )

@@ -14,6 +14,7 @@ The command writes:
     <out_dir>/diagnostics.json
     <out_dir>/normalization_decisions.json
     <out_dir>/io_name_vocab.json
+    <out_dir>/task_vocab.json
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -77,7 +79,7 @@ class VocabularyProgress:
         self,
         stage: str,
         candidate: IONameCandidate,
-        resolution: IONameResolution | None,
+        resolution: Optional[IONameResolution],
     ) -> None:
         if resolution is None:
             self.logger.info(
@@ -117,7 +119,8 @@ def main() -> None:
         nargs="?",
         help=(
             "Directory where representations.json, diagnostics.json, "
-            "normalization_decisions.json, and io_name_vocab.json are written."
+            "normalization_decisions.json, io_name_vocab.json, and "
+            "task_vocab.json are written."
         ),
     )
     parser.add_argument(
@@ -130,7 +133,8 @@ def main() -> None:
         dest="out_dir_opt",
         help=(
             "Directory where representations.json, diagnostics.json, "
-            "normalization_decisions.json, and io_name_vocab.json are written."
+            "normalization_decisions.json, io_name_vocab.json, and "
+            "task_vocab.json are written."
         ),
     )
     parser.add_argument(
@@ -213,6 +217,7 @@ def main() -> None:
                 "diagnostics": "diagnostics.json",
                 "normalization_decisions": "normalization_decisions.json",
                 "io_name_vocab": "io_name_vocab.json",
+                "task_vocab": "task_vocab.json",
             },
             ensure_ascii=False,
             indent=2,

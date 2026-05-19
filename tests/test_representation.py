@@ -96,7 +96,6 @@ def test_normalizer_normalizes_input_and_output_names_and_types(tmp_path: Path) 
     assert representation.inputs[0].type == "text"
     assert representation.outputs[0].name == "paper"
     assert representation.outputs[0].type == "pdf"
-    assert representation.source["body_sha256"] == manifest.body_sha256
     assert representation.inputs[0].to_dict() == {
         "name": "query",
         "type": "text",
@@ -130,6 +129,31 @@ def test_normalizer_uses_shared_io_name_vocab_aliases(tmp_path: Path) -> None:
     assert result.representation.outputs[0].name == "summary"
     assert result.decisions[0].raw_value == "Research Topic"
     assert result.decisions[2].raw_value == "Short Summary"
+
+
+def test_normalizer_normalizes_tasks_with_dynamic_vocab(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    extracted = ExtractedSkillSchema(
+        description="Find papers and create a short summary.",
+        tasks=["Research", "Summarisation", "Custom Ranking"],
+        inputs=[{"name": "Research Topic", "type": "text"}],
+        outputs=[{"name": "Short Summary", "type": "markdown"}],
+    )
+
+    normalizer = SkillRepresentationNormalizer()
+    result = normalizer.normalize(manifest, extracted)
+
+    assert result.representation.tasks == ["search", "summarize", "custom_ranking"]
+    assert normalizer.task_vocabulary.lookup("custom_ranking") == "custom_ranking"
+    task_decisions = [
+        decision for decision in result.decisions
+        if decision.vocab == "task_vocab"
+    ]
+    assert [decision.method for decision in task_decisions] == [
+        "vocab_alias",
+        "vocab_alias",
+        "create_new",
+    ]
 
 
 def test_normalization_config_exposes_io_name_vocab_size_limit() -> None:
@@ -294,6 +318,7 @@ def test_schema_from_llm_payload_keeps_candidate_names_for_normalizer() -> None:
     schema = schema_from_llm_payload(
         {
             "description": "Search arXiv papers.",
+            "tasks": ["research"],
             "inputs": [
                 {
                     "name": "Query or Arxiv ID",
@@ -314,6 +339,7 @@ def test_schema_from_llm_payload_keeps_candidate_names_for_normalizer() -> None:
     )
 
     assert schema.inputs[0].name == "Query or Arxiv ID"
+    assert schema.tasks == ["research"]
     assert schema.outputs[0].type == "pdf"
     assert schema.confidence == 0.9
 
@@ -348,6 +374,7 @@ def test_representation_extractor_accepts_pluggable_schema_extractor(tmp_path: P
         def extract(self, manifest):
             return ExtractedSkillSchema(
                 description="Create a short summary.",
+                tasks=["Summarization"],
                 inputs=[{"name": "Research Topic", "type": "text"}],
                 outputs=[{"name": "Short Summary", "type": "markdown"}],
             )
@@ -357,11 +384,14 @@ def test_representation_extractor_accepts_pluggable_schema_extractor(tmp_path: P
     assert len(result.representations) == 1
     representation = result.representations[0]
     assert representation.id == "demo-skill"
+    assert representation.tasks == ["summarize"]
     assert representation.inputs[0].name == "topic"
     assert representation.outputs[0].name == "summary"
     assert result.diagnostics == []
     assert result.io_name_vocab["version"] == "io-name-vocab-v1"
+    assert result.task_vocab["version"] == "task-vocab-v1"
     assert any(term["name"] == "topic" for term in result.io_name_vocab["terms"])
+    assert any(term["name"] == "summarize" for term in result.task_vocab["terms"])
 
 
 def test_representation_extractor_keeps_scan_order_with_workers(tmp_path: Path) -> None:

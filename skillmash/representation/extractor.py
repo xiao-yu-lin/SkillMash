@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Dict
 
 from skillmash.representation.llm import (
     LLMConfig,
@@ -67,11 +67,12 @@ class OpenAICompatibleSchemaExtractor:
             ) from exc
         return schema_from_llm_payload(payload)
 
-def schema_from_llm_payload(payload: dict[str, Any]) -> ExtractedSkillSchema:
+def schema_from_llm_payload(payload: Dict[str, Any]) -> ExtractedSkillSchema:
     """Convert a raw LLM JSON payload into ExtractedSkillSchema."""
 
     return ExtractedSkillSchema(
         description=str(payload.get("description") or ""),
+        tasks=[str(item) for item in payload.get("tasks", [])],
         inputs=[_parameter_from_payload(item) for item in payload.get("inputs", [])],
         outputs=[_artifact_from_payload(item) for item in payload.get("outputs", [])],
         constraints=[str(item) for item in payload.get("constraints", [])],
@@ -79,7 +80,7 @@ def schema_from_llm_payload(payload: dict[str, Any]) -> ExtractedSkillSchema:
         warnings=[str(item) for item in payload.get("warnings", [])],
     )
 
-def _parameter_from_payload(payload: dict[str, Any]) -> ParameterSpec:
+def _parameter_from_payload(payload: Dict[str, Any]) -> ParameterSpec:
     return ParameterSpec(
         name=str(payload.get("name") or "input"),
         type=_combined_type_from_payload(payload, "text"),
@@ -90,7 +91,7 @@ def _parameter_from_payload(payload: dict[str, Any]) -> ParameterSpec:
     )
 
 
-def _artifact_from_payload(payload: dict[str, Any]) -> ArtifactSpec:
+def _artifact_from_payload(payload: Dict[str, Any]) -> ArtifactSpec:
     return ArtifactSpec(
         name=str(payload.get("name") or "result"),
         type=_combined_type_from_payload(payload, "unknown"),
@@ -99,11 +100,11 @@ def _artifact_from_payload(payload: dict[str, Any]) -> ArtifactSpec:
     )
 
 
-def _combined_type_from_payload(payload: dict[str, Any], default: str) -> str:
+def _combined_type_from_payload(payload: Dict[str, Any], default: str) -> str:
     return str(payload.get("format") or payload.get("type") or default)
 
 
-def _build_llm_context(manifest: RawSkillManifest) -> dict[str, Any]:
+def _build_llm_context(manifest: RawSkillManifest) -> Dict[str, Any]:
     return {
         "source": {
             "relative_path": manifest.folder.relative_path,
@@ -119,6 +120,7 @@ Return JSON only. Do not include markdown.
 
 Required JSON object fields:
 - description: concise string
+- tasks: array of short capability/action terms
 - inputs: array of {name, type, required, description, optional schema_ref}
 - outputs: array of {name, type, description, optional schema_ref}
 - constraints: array of strings
@@ -127,6 +129,10 @@ Required JSON object fields:
 
 Use name for the semantic role and type for the data representation that is
 passed between Skills.
+
+Use tasks for the Skill's normalized capabilities, such as search, summarize,
+translate, extract, analyze, write, generate, convert, validate, or execute.
+Prefer one to three short verb terms.
 
 Prefer these type values:
 text, markdown, json, csv, pdf, html, docx, pptx, xlsx, png, jpg, svg,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Any
+from typing import Any, Dict
 
 
 def normalize_token(raw: str) -> str:
@@ -31,7 +31,7 @@ def normalize_human_name(raw: str) -> str:
     return str(raw).strip()
 
 
-def to_dict(value: Any) -> dict[str, Any]:
+def to_dict(value: Any) -> Dict[str, Any]:
     if isinstance(value, dict):
         return value
     if hasattr(value, "to_dict"):

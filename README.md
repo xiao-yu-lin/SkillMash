@@ -173,16 +173,18 @@ The explicit `--basetemp` avoids Windows temp-directory permission issues seen i
 ```text
 skillmash/
   representation/
-    models.py       representation data contracts
-    scanner.py      finds folders containing SKILL.md
-    manifest.py     parses SKILL.md frontmatter and body
-    extractor.py    OpenAI-compatible LLM schema extractor
-    io_name_vocab.py dynamic input/output name vocabulary
-    llm.py          shared OpenAI-compatible client helpers
-    normalizer.py   deterministic schema normalization
-    pipeline.py     scan -> parse -> extract -> normalize orchestration
-    utils.py        shared text normalization helpers
-    writer.py       writes extraction JSON artifacts
+    base_vocab.py    shared vocabulary infrastructure (base classes, constants, utilities)
+    models.py        representation data contracts
+    scanner.py       finds folders containing SKILL.md
+    manifest.py      parses SKILL.md frontmatter and body
+    extractor.py     OpenAI-compatible LLM schema extractor
+    io_name_vocab.py dynamic input/output name vocabulary (extends base_vocab)
+    semantic_vocab.py dynamic task/capability vocabulary (extends base_vocab)
+    llm.py           shared OpenAI-compatible client helpers
+    normalizer.py    deterministic schema normalization
+    pipeline.py      scan -> parse -> extract -> normalize orchestration
+    utils.py         shared text normalization helpers
+    writer.py        writes extraction JSON artifacts
 
 examples/
   representation_extraction_demo.py

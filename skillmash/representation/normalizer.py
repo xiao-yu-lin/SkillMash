@@ -562,7 +562,7 @@ class SkillRepresentationNormalizer:
 
         resolution = self.io_name_resolver.resolve(
             IONameCandidate(
-                raw_name=raw_name,
+                raw_value=raw_name,
                 token=token,
                 direction=direction,
                 data_type=raw_type,
@@ -607,13 +607,13 @@ class SkillRepresentationNormalizer:
 
         if resolution.action == "create_new" and not self.io_name_vocabulary.is_full():
             return self.io_name_vocabulary.create_term(
-                resolution.normalized_name or token,
+                resolution.normalized_value or token,
                 alias=token,
                 data_type=raw_type,
                 example=description,
             )
 
-        target = resolution.normalized_name or self.io_name_vocabulary.closest_term(token)
+        target = resolution.normalized_value or self.io_name_vocabulary.closest_term(token)
         if target is None:
             return self.io_name_vocabulary.create_term(
                 token,

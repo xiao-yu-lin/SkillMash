@@ -1,5 +1,15 @@
 """Skill representation extraction."""
 
+from skillmash.representation.base_vocab import (
+    BaseCandidate,
+    BaseResolution,
+    BaseResolver,
+    BaseVocabTerm,
+    BaseVocabulary,
+    HeuristicBaseResolver,
+    NON_RUNTIME_HINTS,
+    term_similarity,
+)
 from skillmash.representation.extractor import (
     OpenAICompatibleSchemaExtractor,
     schema_from_llm_payload,
@@ -40,40 +50,60 @@ from skillmash.representation.semantic_vocab import (
     SemanticVocabTerm,
     SemanticVocabulary,
 )
-from skillmash.representation.writer import write_extraction_result
+from skillmash.representation.writer import (
+    write_extraction_result,
+    write_json_file,
+)
 
 __all__ = [
-    "ArtifactSpec",
-    "Condition",
-    "ExtractedSkillSchema",
-    "ExtractionDiagnostic",
+    # Base vocabulary infrastructure
+    "BaseCandidate",
+    "BaseResolution",
+    "BaseResolver",
+    "BaseVocabTerm",
+    "BaseVocabulary",
+    "HeuristicBaseResolver",
+    "NON_RUNTIME_HINTS",
+    "term_similarity",
+    # I/O name vocabulary
     "HeuristicIONameResolver",
-    "HeuristicSemanticResolver",
     "IONameCandidate",
     "IONameResolution",
     "IONameResolver",
     "IONameVocabTerm",
     "IONameVocabulary",
-    "LLMConfig",
-    "NormalizationConfig",
-    "NormalizationDecision",
-    "NormalizationResult",
-    "OpenAICompatibleSchemaExtractor",
     "OpenAICompatibleIONameResolver",
-    "ParameterSpec",
-    "RawSkillManifest",
-    "RepresentationExtractionResult",
-    "RepresentationExtractor",
+    # Semantic vocabulary
+    "HeuristicSemanticResolver",
     "SemanticCandidate",
     "SemanticResolution",
     "SemanticResolver",
     "SemanticVocabTerm",
     "SemanticVocabulary",
+    # Models
+    "ArtifactSpec",
+    "Condition",
+    "ExtractedSkillSchema",
+    "ExtractionDiagnostic",
+    "NormalizationConfig",
+    "NormalizationDecision",
+    "NormalizationResult",
+    "ParameterSpec",
+    "RawSkillManifest",
+    "RepresentationExtractionResult",
     "SkillFolder",
+    "SkillRepresentation",
+    # Extractor
+    "OpenAICompatibleSchemaExtractor",
+    "schema_from_llm_payload",
+    # LLM
+    "LLMConfig",
+    # Pipeline components
+    "RepresentationExtractor",
     "SkillFolderScanner",
     "SkillManifestParser",
-    "SkillRepresentation",
     "SkillRepresentationNormalizer",
-    "schema_from_llm_payload",
+    # Writer
     "write_extraction_result",
+    "write_json_file",
 ]

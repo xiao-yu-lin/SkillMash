@@ -1,14 +1,27 @@
-"""Dynamic vocabulary for normalizing Skill input/output names."""
+"""Dynamic vocabulary for normalizing Skill input/output names.
+
+This module provides specialized vocabulary classes for normalizing
+I/O names (like 'query', 'paper', 'summary'). It builds on the
+shared base vocabulary infrastructure from base_vocab.py.
+"""
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from difflib import SequenceMatcher
 from pathlib import Path
 from threading import RLock
-from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Union
 
+from skillmash.representation.base_vocab import (
+    BaseCandidate,
+    BaseResolution,
+    BaseResolver,
+    BaseVocabTerm,
+    HeuristicBaseResolver,
+    NON_RUNTIME_HINTS,
+    term_similarity,
+)
 from skillmash.representation.llm import (
     LLMConfig,
     create_openai_client,
@@ -19,68 +32,45 @@ from skillmash.representation.models import NormalizationConfig
 
 
 @dataclass(frozen=True)
-class IONameCandidate:
-    raw_name: str
-    token: str
-    direction: str
-    data_type: str
-    description: str
-    skill_id: str
-    path: Optional[str] = None
+class IONameCandidate(BaseCandidate):
+    """Candidate for I/O name vocabulary resolution with direction and type context."""
+
+    direction: str = ""
+    data_type: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "raw_name": self.raw_name,
-            "token": self.token,
-            "direction": self.direction,
-            "type": self.data_type,
-            "description": self.description,
-            "skill_id": self.skill_id,
-            "path": self.path,
-        }
+        data = super().to_dict()
+        data["direction"] = self.direction
+        data["type"] = self.data_type
+        return data
 
 
-@dataclass(frozen=True)
-class IONameResolution:
-    action: str
-    normalized_name: Optional[str]
-    confidence: float
-    reason: str = ""
-    forced_merge: bool = False
+# IONameResolution is identical to BaseResolution, use it as alias.
+IONameResolution = BaseResolution
 
-
-class IONameResolver(Protocol):
-    def resolve(
-        self,
-        candidate: IONameCandidate,
-        vocabulary: "IONameVocabulary",
-    ) -> IONameResolution:
-        ...
+# IONameResolver protocol is identical to BaseResolver, use it as alias.
+IONameResolver = BaseResolver
 
 
 @dataclass
-class IONameVocabTerm:
-    name: str
-    aliases: Set[str] = field(default_factory=set)
-    definition: str = ""
+class IONameVocabTerm(BaseVocabTerm):
+    """I/O name vocabulary term with allowed types constraint."""
+
     allowed_types: Set[str] = field(default_factory=set)
-    examples: List[str] = field(default_factory=list)
-    count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "name": self.name,
-            "definition": self.definition,
-            "aliases": sorted(alias for alias in self.aliases if alias != self.name),
-            "allowed_types": sorted(self.allowed_types),
-            "examples": list(self.examples),
-            "count": self.count,
-        }
+        data = super().to_dict()
+        data["allowed_types"] = sorted(self.allowed_types)
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "IONameVocabTerm":
         name = str(data.get("name") or "").strip()
-        aliases = {str(alias).strip() for alias in data.get("aliases", []) if str(alias).strip()}
+        aliases = {
+            str(alias).strip()
+            for alias in data.get("aliases", [])
+            if str(alias).strip()
+        }
         allowed_types = {
             str(item).strip()
             for item in data.get("allowed_types", [])
@@ -97,7 +87,11 @@ class IONameVocabTerm:
 
 
 class IONameVocabulary:
-    """Mutable io_name_vocab with bounded canonical terms and unbounded aliases."""
+    """Mutable io_name_vocab with bounded canonical terms and unbounded aliases.
+
+    This vocabulary manages I/O name terms used for graph linking.
+    Unlike BaseVocabulary, it supports allowed_types constraints.
+    """
 
     def __init__(
         self,
@@ -237,7 +231,7 @@ class IONameVocabulary:
                 return None
             return max(
                 self._terms,
-                key=lambda name: _term_similarity(token, name),
+                key=lambda name: term_similarity(token, name),
             )
 
     def resolver_context(self) -> Dict[str, Any]:
@@ -264,58 +258,19 @@ class IONameVocabulary:
             }
 
 
-class HeuristicIONameResolver:
+class HeuristicIONameResolver(HeuristicBaseResolver):
     """Deterministic fallback resolver used when no LLM resolver is configured."""
-
-    _NON_RUNTIME_HINTS = {
-        "analytics",
-        "log",
-        "logging",
-        "metric",
-        "metrics",
-        "origin",
-        "original",
-        "raw",
-        "stat",
-        "stats",
-        "telemetry",
-        "trace",
-        "tracking",
-    }
 
     def resolve(
         self,
         candidate: IONameCandidate,
         vocabulary: IONameVocabulary,
     ) -> IONameResolution:
-        if self._is_non_runtime(candidate):
-            return IONameResolution(
-                action="exclude_non_runtime",
-                normalized_name=None,
-                confidence=0.88,
-                reason="Name or description indicates logging, analytics, or original-copy data.",
-            )
-
-        if not vocabulary.is_full():
-            return IONameResolution(
-                action="create_new",
-                normalized_name=candidate.token,
-                confidence=0.7,
-                reason="No existing alias matched and vocabulary has remaining capacity.",
-            )
-
-        target = vocabulary.closest_term(candidate.token)
-        return IONameResolution(
-            action="merge_existing",
-            normalized_name=target,
-            confidence=0.5,
-            reason="Vocabulary is full; merged to the closest existing term.",
-            forced_merge=True,
+        return self.resolve_base(
+            token=candidate.token,
+            description=candidate.description,
+            vocabulary=vocabulary,
         )
-
-    def _is_non_runtime(self, candidate: IONameCandidate) -> bool:
-        text = f"{candidate.token} {candidate.description}".lower()
-        return any(hint in text for hint in self._NON_RUNTIME_HINTS)
 
 
 class OpenAICompatibleIONameResolver:
@@ -353,7 +308,6 @@ class OpenAICompatibleIONameResolver:
         }
         self._emit_progress("start", candidate, None)
         try:
-            print("call llm")
             response = self.client.chat.completions.create(
                 model=self.config.model,
                 temperature=self.config.temperature,
@@ -369,7 +323,6 @@ class OpenAICompatibleIONameResolver:
                     },
                 ],
             )
-            print(context)
         except Exception as exc:
             raise RuntimeError(f"IO name vocabulary LLM request failed: {exc}") from exc
 
@@ -415,20 +368,20 @@ def _resolution_from_payload(
     }:
         action = "merge_existing"
 
-    target = payload.get("target") or payload.get("normalized_name")
-    normalized_name = str(target).strip() if target is not None else None
+    target = payload.get("target") or payload.get("normalized_value") or payload.get("normalized_name")
+    normalized_value = str(target).strip() if target is not None else None
     if action == "exclude_non_runtime":
-        normalized_name = None
+        normalized_value = None
     elif action in {"alias_existing", "merge_existing"}:
-        if normalized_name not in vocabulary.term_names():
-            normalized_name = vocabulary.closest_term(normalized_name or "") or normalized_name
+        if normalized_value not in vocabulary.term_names():
+            normalized_value = vocabulary.closest_term(normalized_value or "") or normalized_value
     elif action == "create_new" and vocabulary.is_full():
         action = "merge_existing"
-        normalized_name = vocabulary.closest_term(normalized_name or "")
+        normalized_value = vocabulary.closest_term(normalized_value or "")
 
     return IONameResolution(
         action=action,
-        normalized_name=normalized_name,
+        normalized_value=normalized_value,
         confidence=_coerce_confidence(payload.get("confidence")),
         reason=str(payload.get("reason") or ""),
         forced_merge=bool(payload.get("forced_merge")) or action == "merge_existing",
@@ -441,14 +394,6 @@ def _coerce_confidence(value: Any) -> float:
     except (TypeError, ValueError):
         return 0.0
     return max(0.0, min(1.0, number))
-
-
-def _term_similarity(left: str, right: str) -> float:
-    left_parts = set(left.split("_"))
-    right_parts = set(right.split("_"))
-    overlap = len(left_parts & right_parts) / max(1, len(left_parts | right_parts))
-    ratio = SequenceMatcher(None, left, right).ratio()
-    return max(overlap, ratio)
 
 
 _IO_NAME_RESOLVER_PROMPT = """Resolve a new Skill input/output name against io_name_vocab.

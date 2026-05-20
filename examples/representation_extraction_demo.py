@@ -99,7 +99,7 @@ class VocabularyProgress:
             candidate.direction,
             candidate.token,
             resolution.action,
-            resolution.normalized_name,
+            resolution.normalized_value,
             resolution.confidence,
             resolution.forced_merge,
         )

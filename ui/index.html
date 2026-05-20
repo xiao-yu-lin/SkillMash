@@ -1,0 +1,1116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SkillMash Graph Viewer</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101114;
+      --panel: #181a20;
+      --panel-2: #20232b;
+      --line: #313642;
+      --text: #f2f4f8;
+      --muted: #a8b0bf;
+      --skill: #4db6ac;
+      --artifact: #ffb84d;
+      --task: #73a7ff;
+      --data: #d87bff;
+      --edge: #7d8797;
+      --active: #ffffff;
+      --danger: #ff6b6b;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr) 360px;
+      height: 100vh;
+    }
+
+    aside {
+      min-width: 0;
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      overflow: auto;
+    }
+
+    .details {
+      border-right: 0;
+      border-left: 1px solid var(--line);
+    }
+
+    main {
+      position: relative;
+      min-width: 0;
+      background:
+        linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px),
+        #0f1116;
+      background-size: 28px 28px;
+    }
+
+    header {
+      position: absolute;
+      inset: 16px 16px auto 16px;
+      z-index: 2;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      pointer-events: none;
+    }
+
+    .hud,
+    .zoom-tools {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px;
+      background: rgba(24, 26, 32, .86);
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+      pointer-events: auto;
+      backdrop-filter: blur(10px);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 650;
+      text-transform: uppercase;
+    }
+
+    .section {
+      padding: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+
+    .stat {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-2);
+    }
+
+    .stat strong {
+      display: block;
+      font-size: 21px;
+      line-height: 1.1;
+    }
+
+    .stat span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    input,
+    select,
+    button {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #11141a;
+      color: var(--text);
+      font: inherit;
+    }
+
+    input[type="search"],
+    select {
+      width: 100%;
+      height: 36px;
+      padding: 0 10px;
+      outline: 0;
+    }
+
+    button {
+      height: 36px;
+      padding: 0 11px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    button:hover,
+    input:focus,
+    select:focus {
+      border-color: #5e6b80;
+    }
+
+    .file-button {
+      display: grid;
+      place-items: center;
+      height: 38px;
+      border: 1px dashed #596273;
+      border-radius: 8px;
+      color: var(--muted);
+      cursor: pointer;
+      text-align: center;
+      font-size: 13px;
+    }
+
+    .file-button input {
+      display: none;
+    }
+
+    label.check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--skill);
+    }
+
+    .legend {
+      display: grid;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .swatch {
+      width: 10px;
+      height: 10px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 100%;
+      padding: 4px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .list {
+      display: grid;
+      gap: 7px;
+      max-height: 32vh;
+      overflow: auto;
+    }
+
+    .item {
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #141820;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .item:hover,
+    .item.active {
+      border-color: #66758c;
+      color: var(--text);
+      background: #1c222d;
+    }
+
+    .item small {
+      display: block;
+      margin-top: 2px;
+      color: #7f8999;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+    }
+
+    canvas.dragging {
+      cursor: grabbing;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .detail-title {
+      overflow-wrap: anywhere;
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+
+    .detail-id {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .detail-text {
+      color: #d5dae5;
+      font-size: 13px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    .kv {
+      display: grid;
+      gap: 8px;
+      font-size: 13px;
+    }
+
+    .kv div {
+      display: grid;
+      gap: 2px;
+    }
+
+    .kv span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .error {
+      color: var(--danger);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 980px) {
+      .app {
+        grid-template-columns: 280px minmax(0, 1fr);
+      }
+
+      .details {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <div class="section stack">
+        <div>
+          <h1>SkillMash Graph</h1>
+          <div class="empty" id="sourceLabel">正在加载 .skillmash/index</div>
+        </div>
+        <label class="file-button">
+          选择 build_manifest.json 或 skill_graph.json
+          <input id="fileInput" type="file" accept=".json,application/json">
+        </label>
+        <label class="file-button">
+          选择构建输出文件夹
+          <input id="folderInput" type="file" webkitdirectory directory multiple>
+        </label>
+        <div class="stats">
+          <div class="stat"><strong id="nodeCount">0</strong><span>节点</span></div>
+          <div class="stat"><strong id="edgeCount">0</strong><span>边</span></div>
+          <div class="stat"><strong id="skillCount">0</strong><span>Skill</span></div>
+          <div class="stat"><strong id="visibleCount">0</strong><span>当前显示</span></div>
+        </div>
+      </div>
+
+      <div class="section stack">
+        <h2>筛选</h2>
+        <input id="searchInput" type="search" placeholder="搜索 Skill、Artifact、Task">
+        <select id="edgeTypeSelect" aria-label="边类型">
+          <option value="all">全部边类型</option>
+        </select>
+        <label class="check"><input id="skillsOnly" type="checkbox"> 只看 Skill 之间的关系</label>
+        <label class="check"><input id="hideLowDegree" type="checkbox"> 隐藏孤立低关联节点</label>
+      </div>
+
+      <div class="section">
+        <h2>图例</h2>
+        <div class="legend">
+          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:var(--skill)"></i> Skill</span><span id="legendSkill">0</span></div>
+          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:var(--artifact)"></i> Artifact</span><span id="legendArtifact">0</span></div>
+          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:var(--task)"></i> Task</span><span id="legendTask">0</span></div>
+          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:var(--data)"></i> Data Type</span><span id="legendData">0</span></div>
+        </div>
+      </div>
+
+      <div class="section stack">
+        <h2>匹配节点</h2>
+        <div class="list" id="nodeList"></div>
+      </div>
+    </aside>
+
+    <main>
+      <header>
+        <div class="hud">
+          <span class="pill" id="statusPill">初始化</span>
+        </div>
+        <div class="zoom-tools">
+          <button id="zoomOut" title="缩小">-</button>
+          <button id="fitView" title="适配画布">适配</button>
+          <button id="zoomIn" title="放大">+</button>
+        </div>
+      </header>
+      <canvas id="graphCanvas"></canvas>
+    </main>
+
+    <aside class="details">
+      <div class="section stack">
+        <h2>节点详情</h2>
+        <div id="detailPanel" class="empty">点击一个节点查看详情。</div>
+      </div>
+      <div class="section stack">
+        <h2>关联边</h2>
+        <div class="list" id="edgeList"></div>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("graphCanvas");
+    const ctx = canvas.getContext("2d");
+    const els = {
+      sourceLabel: document.getElementById("sourceLabel"),
+      nodeCount: document.getElementById("nodeCount"),
+      edgeCount: document.getElementById("edgeCount"),
+      skillCount: document.getElementById("skillCount"),
+      visibleCount: document.getElementById("visibleCount"),
+      legendSkill: document.getElementById("legendSkill"),
+      legendArtifact: document.getElementById("legendArtifact"),
+      legendTask: document.getElementById("legendTask"),
+      legendData: document.getElementById("legendData"),
+      statusPill: document.getElementById("statusPill"),
+      searchInput: document.getElementById("searchInput"),
+      edgeTypeSelect: document.getElementById("edgeTypeSelect"),
+      skillsOnly: document.getElementById("skillsOnly"),
+      hideLowDegree: document.getElementById("hideLowDegree"),
+      nodeList: document.getElementById("nodeList"),
+      detailPanel: document.getElementById("detailPanel"),
+      edgeList: document.getElementById("edgeList"),
+      fileInput: document.getElementById("fileInput"),
+      folderInput: document.getElementById("folderInput"),
+      zoomIn: document.getElementById("zoomIn"),
+      zoomOut: document.getElementById("zoomOut"),
+      fitView: document.getElementById("fitView")
+    };
+
+    const colors = {
+      skill: "#4db6ac",
+      artifact: "#ffb84d",
+      task: "#73a7ff",
+      data_type: "#d87bff",
+      unknown: "#a8b0bf"
+    };
+
+    let graph = { nodes: [], edges: [] };
+    let visible = { nodes: [], edges: [] };
+    let skillsById = new Map();
+    let selectedNode = null;
+    let hoveredNode = null;
+    let transform = { x: 0, y: 0, scale: 1 };
+    let pointer = { x: 0, y: 0, down: false, moved: false, lastX: 0, lastY: 0 };
+    let simulationRunning = true;
+
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+      canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      draw();
+    }
+
+    function typeFromId(id) {
+      if (id.startsWith("skill:")) return "skill";
+      if (id.startsWith("artifact:")) return "artifact";
+      if (id.startsWith("task:")) return "task";
+      if (id.startsWith("type:")) return "data_type";
+      return "skill";
+    }
+
+    function labelFromId(id) {
+      return id.replace(/^(skill:|artifact:|task:|type:)/, "");
+    }
+
+    function normalizeNode(raw, index) {
+      const id = String(raw.id || raw.node_id || raw.skill_id || `node:${index}`);
+      const normalizedId = id.includes(":") ? id : `skill:${id}`;
+      const skillId = normalizedId.replace(/^skill:/, "");
+      const skill = skillsById.get(skillId);
+      return {
+        id: normalizedId,
+        type: raw.type || raw.entity_type || typeFromId(normalizedId),
+        label: raw.label || raw.name || skill?.name || labelFromId(normalizedId),
+        properties: { ...(skill || {}), ...(raw.properties || {}) },
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        degree: 0
+      };
+    }
+
+    function normalizeEdge(raw) {
+      const source = String(raw.source || raw.source_id || "");
+      const target = String(raw.target || raw.target_id || "");
+      return {
+        source: source.includes(":") ? source : `skill:${source}`,
+        target: target.includes(":") ? target : `skill:${target}`,
+        type: raw.type || raw.relation_type || "relates_to",
+        confidence: Number(raw.confidence ?? 1),
+        method: raw.method || "deterministic",
+        evidence: raw.evidence || raw.metadata || {}
+      };
+    }
+
+    function normalizeGraph(payload, skillPayload) {
+      const skills = Array.isArray(skillPayload)
+        ? skillPayload
+        : (skillPayload?.skills || payload.skills || []);
+      skillsById = new Map(skills.map(skill => [String(skill.id), skill]));
+
+      const rawEdges = Array.isArray(payload.edges) ? payload.edges : [];
+      const nodeMap = new Map();
+
+      const rawNodes = Array.isArray(payload.nodes) ? payload.nodes : [];
+      rawNodes.forEach((node, index) => {
+        const normalized = normalizeNode(node, index);
+        nodeMap.set(normalized.id, normalized);
+      });
+
+      for (const skill of skills) {
+        const id = `skill:${skill.id}`;
+        if (!nodeMap.has(id)) {
+          nodeMap.set(id, normalizeNode({ id, type: "skill", label: skill.name, properties: skill }, nodeMap.size));
+        }
+      }
+
+      const edges = rawEdges.map(normalizeEdge).filter(edge => edge.source && edge.target);
+      edges.forEach(edge => {
+        if (!nodeMap.has(edge.source)) nodeMap.set(edge.source, normalizeNode({ id: edge.source }, nodeMap.size));
+        if (!nodeMap.has(edge.target)) nodeMap.set(edge.target, normalizeNode({ id: edge.target }, nodeMap.size));
+      });
+
+      const nodes = [...nodeMap.values()];
+      const byId = new Map(nodes.map(node => [node.id, node]));
+      edges.forEach(edge => {
+        const source = byId.get(edge.source);
+        const target = byId.get(edge.target);
+        if (source) source.degree += 1;
+        if (target) target.degree += 1;
+      });
+
+      seedPositions(nodes);
+      return { nodes, edges };
+    }
+
+    function seedPositions(nodes) {
+      const width = canvas.clientWidth || 900;
+      const height = canvas.clientHeight || 700;
+      const radius = Math.min(width, height) * 0.36;
+      nodes.forEach((node, index) => {
+        const angle = (index / Math.max(1, nodes.length)) * Math.PI * 2;
+        const jitter = ((index * 97) % 31) / 31;
+        node.x = Math.cos(angle) * radius * (0.55 + jitter * 0.55);
+        node.y = Math.sin(angle) * radius * (0.55 + jitter * 0.55);
+      });
+      transform.x = width / 2;
+      transform.y = height / 2;
+      transform.scale = 1;
+    }
+
+    async function loadDefault() {
+      const outputDir = getOutputDirFromUrl();
+      const basePath = outputDir || "../.skillmash/index";
+      try {
+        const manifestResponse = await fetchJsonFromDir(basePath, "build_manifest.json");
+        const manifest = manifestResponse.ok ? await safeJson(manifestResponse.response) : null;
+        const graphName = manifest?.artifacts?.graph || "skill_graph.json";
+        const skillsName = manifest?.artifacts?.skills || "skills.json";
+        const [graphResponse, skillsResponse] = await Promise.all([
+          fetchJsonFromDir(basePath, graphName),
+          fetchJsonFromDir(basePath, skillsName)
+        ]);
+        if (!graphResponse.ok) throw new Error(`无法读取 ${joinUrlPath(basePath, graphName)}`);
+        const graphPayload = await graphResponse.response.json();
+        const skillPayload = skillsResponse.ok ? await safeJson(skillsResponse.response) : null;
+        graph = normalizeGraph(graphPayload, skillPayload);
+        const label = outputDir ? `已加载 ${outputDir}` : "已加载默认图";
+        els.sourceLabel.textContent = manifest?.created_at ? `${label} · ${new Date(manifest.created_at).toLocaleString()}` : label;
+        afterGraphLoaded();
+      } catch (error) {
+        els.sourceLabel.innerHTML = `<span class="error">${escapeHtml(error.message)}。请确认路径在服务根目录下，或使用“选择构建输出文件夹”。</span>`;
+        graph = { nodes: [], edges: [] };
+        applyFilters();
+      }
+    }
+
+    async function fetchJsonFromDir(basePath, fileName) {
+      const response = await fetch(joinUrlPath(basePath, fileName));
+      return { ok: response.ok, response };
+    }
+
+    function getOutputDirFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const value = params.get("build_dir") || params.get("out_dir") || params.get("index") || params.get("dir");
+      return value ? normalizePath(decodeURIComponent(value)) : "";
+    }
+
+    function joinUrlPath(basePath, fileName) {
+      const base = normalizePath(basePath).replace(/\/+$/, "");
+      const name = normalizePath(fileName).replace(/^\/+/, "");
+      return `${base}/${name}`;
+    }
+
+    async function readJsonFile(file) {
+      const text = await file.text();
+      const payload = JSON.parse(text);
+      if (payload.artifacts?.graph) {
+        throw new Error("请选择构建输出文件夹，或直接选择 skill_graph.json。单独选择 manifest 时浏览器不能读取相邻文件。");
+      }
+      graph = normalizeGraph(payload, null);
+      els.sourceLabel.textContent = `已加载 ${file.name}`;
+      afterGraphLoaded();
+    }
+
+    async function readBuildFolder(files) {
+      const fileMap = new Map();
+      for (const file of files) {
+        const path = normalizePath(file.webkitRelativePath || file.name);
+        fileMap.set(path, file);
+        fileMap.set(file.name, file);
+      }
+
+      const manifestFile = findFolderFile(fileMap, "build_manifest.json");
+      const manifest = manifestFile ? await parseJsonFile(manifestFile, true) : null;
+      const graphName = manifest?.artifacts?.graph || "skill_graph.json";
+      const skillsName = manifest?.artifacts?.skills || "skills.json";
+      const graphFile = findFolderFile(fileMap, graphName);
+
+      if (!graphFile) {
+        throw new Error(`所选文件夹中没有找到 ${graphName}`);
+      }
+
+      const graphPayload = await parseJsonFile(graphFile, false);
+      const skillsFile = findFolderFile(fileMap, skillsName);
+      const skillPayload = skillsFile ? await parseJsonFile(skillsFile, true) : null;
+      graph = normalizeGraph(graphPayload, skillPayload);
+
+      const folderName = getFolderName(files[0]);
+      const skillStatus = skillsFile && skillPayload ? `，已读取 ${skillsName}` : "，未使用 skills.json";
+      els.sourceLabel.textContent = `已加载 ${folderName || "构建输出文件夹"}${skillStatus}`;
+      if (manifest?.created_at) {
+        els.sourceLabel.textContent += ` · ${new Date(manifest.created_at).toLocaleString()}`;
+      }
+      afterGraphLoaded();
+    }
+
+    async function parseJsonFile(file, optional) {
+      try {
+        return JSON.parse(await file.text());
+      } catch (error) {
+        if (optional) return null;
+        throw new Error(`${file.name} 不是有效 JSON：${error.message}`);
+      }
+    }
+
+    function findFolderFile(fileMap, name) {
+      const normalizedName = normalizePath(name);
+      if (fileMap.has(normalizedName)) return fileMap.get(normalizedName);
+      const baseName = normalizedName.split("/").pop();
+      for (const [path, file] of fileMap.entries()) {
+        if (path.endsWith(`/${normalizedName}`) || path.endsWith(`/${baseName}`) || path === baseName) {
+          return file;
+        }
+      }
+      return null;
+    }
+
+    function normalizePath(path) {
+      return String(path || "").replace(/\\/g, "/").replace(/^\/+/, "");
+    }
+
+    function getFolderName(file) {
+      const path = normalizePath(file?.webkitRelativePath || "");
+      return path.split("/")[0] || "";
+    }
+
+    async function safeJson(response) {
+      try {
+        return await response.json();
+      } catch {
+        return null;
+      }
+    }
+
+    function afterGraphLoaded() {
+      const edgeTypes = [...new Set(graph.edges.map(edge => edge.type))].sort();
+      els.edgeTypeSelect.innerHTML = '<option value="all">全部边类型</option>' + edgeTypes.map(type => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`).join("");
+      selectedNode = null;
+      simulationRunning = true;
+      applyFilters();
+    }
+
+    function applyFilters() {
+      const query = els.searchInput.value.trim().toLowerCase();
+      const edgeType = els.edgeTypeSelect.value;
+      const skillsOnly = els.skillsOnly.checked;
+      const hideLow = els.hideLowDegree.checked;
+      const nodeById = new Map(graph.nodes.map(node => [node.id, node]));
+      let edges = graph.edges.filter(edge => {
+        if (edgeType !== "all" && edge.type !== edgeType) return false;
+        const source = nodeById.get(edge.source);
+        const target = nodeById.get(edge.target);
+        if (!source || !target) return false;
+        if (skillsOnly && (source.type !== "skill" || target.type !== "skill")) return false;
+        if (query) {
+          const haystack = `${source.label} ${source.id} ${target.label} ${target.id} ${edge.type}`.toLowerCase();
+          return haystack.includes(query);
+        }
+        return true;
+      });
+
+      const ids = new Set();
+      edges.forEach(edge => {
+        ids.add(edge.source);
+        ids.add(edge.target);
+      });
+
+      let nodes = graph.nodes.filter(node => {
+        if (skillsOnly && node.type !== "skill") return false;
+        if (hideLow && node.degree <= 1) return false;
+        if (!query) return ids.has(node.id) || graph.edges.length === 0;
+        return ids.has(node.id) || `${node.label} ${node.id}`.toLowerCase().includes(query);
+      });
+
+      const visibleIds = new Set(nodes.map(node => node.id));
+      edges = edges.filter(edge => visibleIds.has(edge.source) && visibleIds.has(edge.target));
+      visible = { nodes, edges };
+      renderStats();
+      renderNodeList();
+      renderDetails();
+      draw();
+    }
+
+    function renderStats() {
+      const counts = graph.nodes.reduce((acc, node) => {
+        acc[node.type] = (acc[node.type] || 0) + 1;
+        return acc;
+      }, {});
+      els.nodeCount.textContent = graph.nodes.length;
+      els.edgeCount.textContent = graph.edges.length;
+      els.skillCount.textContent = counts.skill || 0;
+      els.visibleCount.textContent = visible.nodes.length;
+      els.legendSkill.textContent = counts.skill || 0;
+      els.legendArtifact.textContent = counts.artifact || 0;
+      els.legendTask.textContent = counts.task || 0;
+      els.legendData.textContent = counts.data_type || 0;
+      els.statusPill.textContent = visible.nodes.length ? `${visible.nodes.length} nodes / ${visible.edges.length} edges` : "没有可显示的节点";
+    }
+
+    function renderNodeList() {
+      const topNodes = [...visible.nodes]
+        .sort((a, b) => b.degree - a.degree || a.label.localeCompare(b.label))
+        .slice(0, 80);
+      if (!topNodes.length) {
+        els.nodeList.innerHTML = '<div class="empty">没有匹配节点。</div>';
+        return;
+      }
+      els.nodeList.innerHTML = topNodes.map(node => `
+        <div class="item ${selectedNode?.id === node.id ? "active" : ""}" data-node-id="${escapeHtml(node.id)}">
+          ${escapeHtml(node.label)}
+          <small>${escapeHtml(node.type)} · degree ${node.degree}</small>
+        </div>
+      `).join("");
+    }
+
+    function renderDetails() {
+      if (!selectedNode) {
+        els.detailPanel.innerHTML = '<div class="empty">点击一个节点查看详情。</div>';
+        els.edgeList.innerHTML = '<div class="empty">暂无选择。</div>';
+        return;
+      }
+
+      const props = selectedNode.properties || {};
+      const description = props.description ? `<div class="detail-text">${escapeHtml(props.description)}</div>` : "";
+      const tags = [...(props.skill_tags || []), ...(props.data_tags || [])].slice(0, 16);
+      const tagsHtml = tags.length ? `<div>${tags.map(tag => `<span class="pill">${escapeHtml(tag)}</span>`).join(" ")}</div>` : "";
+      els.detailPanel.innerHTML = `
+        <div>
+          <div class="detail-title">${escapeHtml(selectedNode.label)}</div>
+          <div class="detail-id">${escapeHtml(selectedNode.id)}</div>
+        </div>
+        <div class="kv">
+          <div><span>类型</span><strong>${escapeHtml(selectedNode.type)}</strong></div>
+          <div><span>关联度</span><strong>${selectedNode.degree}</strong></div>
+          ${props.version ? `<div><span>版本</span><strong>${escapeHtml(props.version)}</strong></div>` : ""}
+        </div>
+        ${description}
+        ${tagsHtml}
+      `;
+
+      const related = graph.edges
+        .filter(edge => edge.source === selectedNode.id || edge.target === selectedNode.id)
+        .slice(0, 120);
+      els.edgeList.innerHTML = related.length ? related.map(edge => {
+        const direction = edge.source === selectedNode.id ? "→" : "←";
+        const otherId = edge.source === selectedNode.id ? edge.target : edge.source;
+        const other = graph.nodes.find(node => node.id === otherId);
+        return `<div class="item" data-node-id="${escapeHtml(otherId)}">${direction} ${escapeHtml(other?.label || labelFromId(otherId))}<small>${escapeHtml(edge.type)} · ${Math.round(edge.confidence * 100)}%</small></div>`;
+      }).join("") : '<div class="empty">没有关联边。</div>';
+    }
+
+    function tick() {
+      if (simulationRunning && visible.nodes.length) {
+        stepSimulation();
+      }
+      draw();
+      requestAnimationFrame(tick);
+    }
+
+    function stepSimulation() {
+      const nodes = visible.nodes;
+      const nodeById = new Map(nodes.map(node => [node.id, node]));
+      const width = canvas.clientWidth || 900;
+      const height = canvas.clientHeight || 700;
+      const linkDistance = els.skillsOnly.checked ? 150 : 105;
+
+      for (let i = 0; i < nodes.length; i += 1) {
+        for (let j = i + 1; j < nodes.length; j += 1) {
+          const a = nodes[i];
+          const b = nodes[j];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const dist2 = Math.max(80, dx * dx + dy * dy);
+          const force = Math.min(460 / dist2, 0.07);
+          a.vx -= dx * force;
+          a.vy -= dy * force;
+          b.vx += dx * force;
+          b.vy += dy * force;
+        }
+      }
+
+      visible.edges.forEach(edge => {
+        const source = nodeById.get(edge.source);
+        const target = nodeById.get(edge.target);
+        if (!source || !target) return;
+        const dx = target.x - source.x;
+        const dy = target.y - source.y;
+        const dist = Math.max(1, Math.hypot(dx, dy));
+        const strength = edge.type === "can_feed" ? 0.025 : 0.014;
+        const force = (dist - linkDistance) * strength;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        source.vx += fx;
+        source.vy += fy;
+        target.vx -= fx;
+        target.vy -= fy;
+      });
+
+      nodes.forEach(node => {
+        node.vx += -node.x * 0.002;
+        node.vy += -node.y * 0.002;
+        node.vx *= 0.82;
+        node.vy *= 0.82;
+        node.x += node.vx;
+        node.y += node.vy;
+        node.x = Math.max(-width, Math.min(width, node.x));
+        node.y = Math.max(-height, Math.min(height, node.y));
+      });
+    }
+
+    function draw() {
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      ctx.clearRect(0, 0, width, height);
+      ctx.save();
+      ctx.translate(transform.x, transform.y);
+      ctx.scale(transform.scale, transform.scale);
+
+      const nodeById = new Map(visible.nodes.map(node => [node.id, node]));
+      const focusId = selectedNode?.id || hoveredNode?.id;
+      visible.edges.forEach(edge => {
+        const source = nodeById.get(edge.source);
+        const target = nodeById.get(edge.target);
+        if (!source || !target) return;
+        const active = focusId && (edge.source === focusId || edge.target === focusId);
+        drawEdge(source, target, edge, active);
+      });
+
+      visible.nodes.forEach(node => drawNode(node, node.id === selectedNode?.id, node.id === hoveredNode?.id));
+      ctx.restore();
+    }
+
+    function drawEdge(source, target, edge, active) {
+      const color = active ? "#ffffff" : edgeColor(edge.type);
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = active ? 0.8 : 0.24;
+      ctx.lineWidth = active ? 2.2 : 1.1;
+      ctx.beginPath();
+      ctx.moveTo(source.x, source.y);
+      ctx.lineTo(target.x, target.y);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      const angle = Math.atan2(target.y - source.y, target.x - source.x);
+      const radius = nodeRadius(target);
+      const x = target.x - Math.cos(angle) * radius;
+      const y = target.y - Math.sin(angle) * radius;
+      ctx.fillStyle = color;
+      ctx.globalAlpha = active ? 0.85 : 0.35;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - Math.cos(angle - 0.5) * 8, y - Math.sin(angle - 0.5) * 8);
+      ctx.lineTo(x - Math.cos(angle + 0.5) * 8, y - Math.sin(angle + 0.5) * 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    function drawNode(node, selected, hovered) {
+      const radius = nodeRadius(node);
+      ctx.fillStyle = colors[node.type] || colors.unknown;
+      ctx.strokeStyle = selected ? "#ffffff" : hovered ? "#e3e8f2" : "rgba(255,255,255,.18)";
+      ctx.lineWidth = selected ? 3 : hovered ? 2.4 : 1.2;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      if (transform.scale > 0.42 || selected || hovered) {
+        ctx.font = `${selected ? 13 : 11}px Inter, system-ui, sans-serif`;
+        ctx.fillStyle = selected || hovered ? "#ffffff" : "#cbd2dd";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        const label = node.label.length > 26 ? `${node.label.slice(0, 24)}...` : node.label;
+        ctx.fillText(label, node.x, node.y + radius + 5);
+      }
+    }
+
+    function nodeRadius(node) {
+      const base = node.type === "skill" ? 7 : 5;
+      return Math.min(22, base + Math.sqrt(Math.max(0, node.degree)) * 2.1);
+    }
+
+    function edgeColor(type) {
+      if (type === "produces") return "#ffb84d";
+      if (type === "consumes") return "#4db6ac";
+      if (type === "can_feed") return "#ffffff";
+      if (type === "similar_to") return "#73a7ff";
+      if (type === "substitute_for") return "#d87bff";
+      if (type === "composes_with") return "#f07178";
+      return "#7d8797";
+    }
+
+    function screenToWorld(x, y) {
+      return {
+        x: (x - transform.x) / transform.scale,
+        y: (y - transform.y) / transform.scale
+      };
+    }
+
+    function findNodeAt(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const point = screenToWorld(clientX - rect.left, clientY - rect.top);
+      for (let i = visible.nodes.length - 1; i >= 0; i -= 1) {
+        const node = visible.nodes[i];
+        const hit = nodeRadius(node) + 5 / transform.scale;
+        if (Math.hypot(node.x - point.x, node.y - point.y) <= hit) return node;
+      }
+      return null;
+    }
+
+    function selectNode(node) {
+      selectedNode = node;
+      renderNodeList();
+      renderDetails();
+      draw();
+    }
+
+    function fitView() {
+      if (!visible.nodes.length) return;
+      const rect = canvas.getBoundingClientRect();
+      const xs = visible.nodes.map(node => node.x);
+      const ys = visible.nodes.map(node => node.y);
+      const minX = Math.min(...xs);
+      const maxX = Math.max(...xs);
+      const minY = Math.min(...ys);
+      const maxY = Math.max(...ys);
+      const graphW = Math.max(1, maxX - minX);
+      const graphH = Math.max(1, maxY - minY);
+      transform.scale = Math.max(0.18, Math.min(2.2, Math.min((rect.width - 80) / graphW, (rect.height - 80) / graphH)));
+      transform.x = rect.width / 2 - ((minX + maxX) / 2) * transform.scale;
+      transform.y = rect.height / 2 - ((minY + maxY) / 2) * transform.scale;
+      draw();
+    }
+
+    function zoomAt(factor) {
+      const rect = canvas.getBoundingClientRect();
+      const cx = rect.width / 2;
+      const cy = rect.height / 2;
+      const before = screenToWorld(cx, cy);
+      transform.scale = Math.max(0.12, Math.min(4, transform.scale * factor));
+      transform.x = cx - before.x * transform.scale;
+      transform.y = cy - before.y * transform.scale;
+      draw();
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#039;"
+      }[char]));
+    }
+
+    canvas.addEventListener("pointerdown", event => {
+      pointer.down = true;
+      pointer.moved = false;
+      pointer.lastX = event.clientX;
+      pointer.lastY = event.clientY;
+      canvas.setPointerCapture(event.pointerId);
+      canvas.classList.add("dragging");
+    });
+
+    canvas.addEventListener("pointermove", event => {
+      hoveredNode = findNodeAt(event.clientX, event.clientY);
+      if (pointer.down) {
+        const dx = event.clientX - pointer.lastX;
+        const dy = event.clientY - pointer.lastY;
+        if (Math.hypot(dx, dy) > 2) pointer.moved = true;
+        transform.x += dx;
+        transform.y += dy;
+        pointer.lastX = event.clientX;
+        pointer.lastY = event.clientY;
+      }
+      draw();
+    });
+
+    canvas.addEventListener("pointerup", event => {
+      if (!pointer.moved) {
+        selectNode(findNodeAt(event.clientX, event.clientY));
+      }
+      pointer.down = false;
+      canvas.classList.remove("dragging");
+    });
+
+    canvas.addEventListener("wheel", event => {
+      event.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const before = screenToWorld(event.clientX - rect.left, event.clientY - rect.top);
+      const factor = event.deltaY < 0 ? 1.12 : 0.88;
+      transform.scale = Math.max(0.12, Math.min(4, transform.scale * factor));
+      transform.x = event.clientX - rect.left - before.x * transform.scale;
+      transform.y = event.clientY - rect.top - before.y * transform.scale;
+      draw();
+    }, { passive: false });
+
+    els.nodeList.addEventListener("click", event => {
+      const item = event.target.closest("[data-node-id]");
+      if (!item) return;
+      const node = graph.nodes.find(candidate => candidate.id === item.dataset.nodeId);
+      if (node) selectNode(node);
+    });
+
+    els.edgeList.addEventListener("click", event => {
+      const item = event.target.closest("[data-node-id]");
+      if (!item) return;
+      const node = graph.nodes.find(candidate => candidate.id === item.dataset.nodeId);
+      if (node) selectNode(node);
+    });
+
+    [els.searchInput, els.edgeTypeSelect, els.skillsOnly, els.hideLowDegree].forEach(el => {
+      el.addEventListener("input", applyFilters);
+      el.addEventListener("change", applyFilters);
+    });
+
+    els.fileInput.addEventListener("change", async event => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      try {
+        await readJsonFile(file);
+      } catch (error) {
+        els.sourceLabel.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+      }
+    });
+
+    els.folderInput.addEventListener("change", async event => {
+      const files = [...(event.target.files || [])];
+      if (!files.length) return;
+      try {
+        await readBuildFolder(files);
+      } catch (error) {
+        els.sourceLabel.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+      }
+    });
+
+    els.zoomIn.addEventListener("click", () => zoomAt(1.2));
+    els.zoomOut.addEventListener("click", () => zoomAt(0.84));
+    els.fitView.addEventListener("click", fitView);
+    window.addEventListener("resize", resize);
+
+    resize();
+    loadDefault();
+    tick();
+  </script>
+</body>
+</html>

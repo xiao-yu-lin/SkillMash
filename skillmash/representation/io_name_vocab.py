@@ -408,6 +408,7 @@ class OpenAICompatibleIONameResolver:
                 model=self.config.model,
                 temperature=self.config.temperature,
                 response_format={"type": "json_object"},
+                timeout=200,
                 messages=[
                     {
                         "role": "system",

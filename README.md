@@ -102,6 +102,28 @@ OUTPUT/
 
 Progress is printed to `stderr` as a small progress bar. A JSON summary is printed to `stdout` when extraction finishes.
 
+## Run Graph Construction
+
+After representation extraction, build the ontology-driven Skill graph from `representations.json`:
+
+```powershell
+.\.venv\Scripts\python.exe examples\graph_build_demo.py --representations_json OUTPUT\representations.json --out_dir .skillmash\index
+```
+
+The graph builder first generates deterministic relation candidates from normalized `description`, `tasks`, `inputs`, and `outputs`, then asks the LLM to validate those candidates. It writes:
+
+```text
+.skillmash/index/
+  build_manifest.json
+  skills.json
+  skill_graph.json
+  skill_index.json
+  llm_matches.json
+  diagnostics.json
+```
+
+`skill_graph.json` contains deterministic base edges such as `produces`, `consumes`, `has_task`, and `uses_data_type`, plus accepted LLM relation edges such as `can_feed`, `similar_to`, `substitute_for`, and `composes_with`. `llm_matches.json` keeps both candidates and LLM judgments for traceability.
+
 ## Output Shape
 
 `representations.json` contains normalized Skill records:

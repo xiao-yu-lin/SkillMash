@@ -57,6 +57,7 @@ class ConsoleProgress:
                 f"candidates={details.get('candidate_count', 0)} "
                 f"batch_size={details.get('batch_size', 0)} "
                 f"workers={details.get('max_workers', 1)} "
+                f"consensus_runs={details.get('consensus_runs', 1)} "
                 f"batches={total}"
             )
         elif event == "batch_start":
@@ -66,6 +67,7 @@ class ConsoleProgress:
             self.log(
                 "llm batch start: "
                 f"{current}/{total} candidates={details.get('candidate_count', 0)} "
+                f"consensus_runs={details.get('consensus_runs', 1)} "
                 f"input_sha256={details.get('input_sha256')} "
                 f"[{preview}{suffix}]"
             )
@@ -121,6 +123,32 @@ def main() -> None:
         default=1,
         help="Number of concurrent LLM matching requests. Defaults to 1.",
     )
+    parser.add_argument(
+        "--no_consensus",
+        action="store_true",
+        help=(
+            "Disable the default two-pass order-swapped LLM consensus check. "
+            "Use this only when optimizing for speed over relation precision."
+        ),
+    )
+    parser.add_argument(
+        "--can_feed_threshold",
+        type=float,
+        default=0.0,
+        help="Minimum confidence for accepting can_feed matches. Defaults to 0.",
+    )
+    parser.add_argument(
+        "--similar_to_threshold",
+        type=float,
+        default=0.0,
+        help="Minimum confidence for accepting similar_to matches. Defaults to 0.",
+    )
+    parser.add_argument(
+        "--substitute_for_threshold",
+        type=float,
+        default=0.0,
+        help="Minimum confidence for accepting substitute_for matches. Defaults to 0.",
+    )
     args = parser.parse_args()
 
     representations_arg = (
@@ -148,6 +176,12 @@ def main() -> None:
         llm_config,
         batch_size=max(1, args.batch_size),
         max_workers=max(1, args.workers),
+        require_consensus=not args.no_consensus,
+        thresholds={
+            "can_feed": _clamp_threshold(args.can_feed_threshold),
+            "similar_to": _clamp_threshold(args.similar_to_threshold),
+            "substitute_for": _clamp_threshold(args.substitute_for_threshold),
+        },
         progress=progress.llm,
     )
     progress.log("building graph artifacts")
@@ -189,6 +223,10 @@ def _load_representations(path: Path) -> list[SkillRepresentation]:
         _representation_from_payload(item)
         for item in payload.get("representations", [])
     ]
+
+
+def _clamp_threshold(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
 
 
 def _representation_from_payload(payload: dict) -> SkillRepresentation:

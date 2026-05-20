@@ -24,10 +24,9 @@ from skillmash.representation.models import SkillRepresentation
 
 
 DEFAULT_THRESHOLDS = {
-    "can_feed": 0.8,
-    "similar_to": 0.75,
-    "substitute_for": 0.85,
-    "composes_with": 0.75,
+    "can_feed": 0.0,
+    "similar_to": 0.0,
+    "substitute_for": 0.0,
 }
 
 
@@ -58,6 +57,7 @@ class OpenAICompatibleOntologyMatcher:
         *,
         batch_size: int = 12,
         max_workers: int = 1,
+        require_consensus: bool = True,
         prompt_version: str = "skillmash-graph-match-v1",
         thresholds: Dict[str, float] = DEFAULT_THRESHOLDS,
         progress: Optional[MatchProgress] = None,
@@ -65,6 +65,7 @@ class OpenAICompatibleOntologyMatcher:
         self.config = config
         self.batch_size = batch_size
         self.max_workers = max(1, max_workers)
+        self.require_consensus = require_consensus
         self.prompt_version = prompt_version
         self.thresholds = thresholds
         self.progress = progress
@@ -92,6 +93,7 @@ class OpenAICompatibleOntologyMatcher:
                 "candidate_count": len(candidate_list),
                 "batch_size": self.batch_size,
                 "max_workers": self.max_workers,
+                "consensus_runs": 2 if self.require_consensus else 1,
             },
         )
         batches = [
@@ -101,6 +103,10 @@ class OpenAICompatibleOntologyMatcher:
                 start=1,
             )
         ]
+        batch_sizes = {
+            batch_index: len(batch)
+            for batch_index, batch in batches
+        }
         if self.max_workers == 1 or len(batches) <= 1:
             results = [
                 self._match_batch(registry, batch, batch_index, total_batches)
@@ -133,7 +139,7 @@ class OpenAICompatibleOntologyMatcher:
                 batch_index,
                 total_batches,
                 {
-                    "candidate_count": len(batch),
+                    "candidate_count": batch_sizes[batch_index],
                     "match_count": len(batch_matches),
                     "accepted_count": len(
                         [match for match in batch_matches if match.accepted]
@@ -161,6 +167,8 @@ class OpenAICompatibleOntologyMatcher:
             "prompt_version": self.prompt_version,
             "batch_size": self.batch_size,
             "max_workers": self.max_workers,
+            "require_consensus": self.require_consensus,
+            "consensus_runs": 2 if self.require_consensus else 1,
         }
 
     def _match_batch(
@@ -179,12 +187,49 @@ class OpenAICompatibleOntologyMatcher:
                 "candidate_count": len(batch),
                 "input_sha256": payload["input_sha256"],
                 "candidate_ids": [candidate.key for candidate in batch],
+                "consensus_runs": 2 if self.require_consensus else 1,
             },
+        )
+        first_matches, first_diagnostics = self._request_and_validate_batch(
+            registry,
+            batch,
+            reverse_skill_order=False,
+        )
+        if not self.require_consensus:
+            return batch_index, first_matches, first_diagnostics
+
+        second_matches, second_diagnostics = self._request_and_validate_batch(
+            registry,
+            batch,
+            reverse_skill_order=True,
+        )
+        consensus_matches, consensus_diagnostics = _consensus_matches(
+            first_matches,
+            second_matches,
+        )
+        return (
+            batch_index,
+            consensus_matches,
+            first_diagnostics + second_diagnostics + consensus_diagnostics,
+        )
+
+    def _request_and_validate_batch(
+        self,
+        registry: SkillRegistry,
+        batch: List[RelationCandidate],
+        *,
+        reverse_skill_order: bool,
+    ) -> tuple[List[LLMMatch], List[GraphDiagnostic]]:
+        payload = _build_llm_context(
+            registry,
+            batch,
+            reverse_skill_order=reverse_skill_order,
         )
         try:
             response = self.client.chat.completions.create(
                 model=self.config.model,
                 temperature=self.config.temperature,
+                timeout=200,
                 response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": _SYSTEM_PROMPT},
@@ -222,7 +267,7 @@ class OpenAICompatibleOntologyMatcher:
             batch,
             thresholds=self.thresholds,
         )
-        return batch_index, batch_matches, batch_diagnostics
+        return batch_matches, batch_diagnostics
 
     def _emit_progress(
         self,
@@ -246,10 +291,10 @@ def validate_llm_matches(
     """Normalize and validate raw LLM matches."""
 
     candidate_by_key = {candidate.key: candidate for candidate in candidates}
-    candidates_by_pair = {
-        (candidate.source_id, candidate.target_id, candidate.relation_hint): candidate
-        for candidate in candidates
-    }
+    candidates_by_pair = {}
+    for candidate in candidates:
+        candidates_by_pair[(candidate.source_id, candidate.target_id)] = candidate
+        candidates_by_pair[(candidate.target_id, candidate.source_id)] = candidate
     matches: List[LLMMatch] = []
     diagnostics: List[GraphDiagnostic] = []
 
@@ -291,7 +336,7 @@ def _normalize_match(
     raw: Dict[str, Any],
     registry: SkillRegistry,
     candidate_by_key: Dict[str, RelationCandidate],
-    candidates_by_pair: Dict[tuple[str, str, str], RelationCandidate],
+    candidates_by_pair: Dict[tuple[str, str], RelationCandidate],
     thresholds: Dict[str, float],
 ) -> tuple[Optional[LLMMatch], List[GraphDiagnostic]]:
     diagnostics: List[GraphDiagnostic] = []
@@ -313,9 +358,11 @@ def _normalize_match(
     if candidate_id:
         candidate = candidate_by_key.get(candidate_id)
     if candidate is None:
-        candidate = candidates_by_pair.get((source_id, target_id, relation_type))
+        candidate = candidates_by_pair.get((source_id, target_id))
     if candidate is None:
         errors.append("match does not correspond to an input candidate")
+    elif relation_type not in candidate.relation_hints:
+        errors.append("relation_type is not allowed for the input candidate")
 
     try:
         confidence = float(raw.get("confidence", 0))
@@ -334,14 +381,19 @@ def _normalize_match(
     if relation_type == "can_feed" and candidate is not None:
         source_outputs = set(_field_names(supporting_fields.get("source_outputs", [])))
         target_inputs = set(_field_names(supporting_fields.get("target_inputs", [])))
+        directional_evidence = _directional_evidence(
+            candidate,
+            source_id,
+            target_id,
+        )
         evidence_outputs = {
             item.get("name")
-            for item in candidate.evidence.get("source_outputs", [])
+            for item in directional_evidence.get("source_outputs", [])
             if isinstance(item, dict)
         }
         evidence_inputs = {
             item.get("name")
-            for item in candidate.evidence.get("target_inputs", [])
+            for item in directional_evidence.get("target_inputs", [])
             if isinstance(item, dict)
         }
         if source_outputs and target_inputs:
@@ -406,14 +458,115 @@ def _field_names(values: Any) -> List[str]:
     return names
 
 
+def _directional_evidence(
+    candidate: RelationCandidate,
+    source_id: str,
+    target_id: str,
+) -> Dict[str, Any]:
+    directions = candidate.evidence.get("directions", {})
+    if isinstance(directions, dict):
+        evidence = directions.get(f"{source_id}->{target_id}")
+        if isinstance(evidence, dict):
+            return evidence
+    return candidate.evidence
+
+
+def _consensus_matches(
+    first_matches: List[LLMMatch],
+    second_matches: List[LLMMatch],
+) -> tuple[List[LLMMatch], List[GraphDiagnostic]]:
+    first_by_key = {
+        _match_key(match): match for match in first_matches if match.accepted
+    }
+    second_by_key = {
+        _match_key(match): match for match in second_matches if match.accepted
+    }
+    shared_keys = sorted(set(first_by_key) & set(second_by_key))
+    consensus: List[LLMMatch] = []
+    diagnostics: List[GraphDiagnostic] = []
+
+    for key in shared_keys:
+        first = first_by_key[key]
+        second = second_by_key[key]
+        consensus.append(
+            LLMMatch(
+                source_id=first.source_id,
+                target_id=first.target_id,
+                relation_type=first.relation_type,
+                confidence=min(first.confidence, second.confidence),
+                method="llm_consensus_match",
+                reasons=_dedupe_strings(first.reasons + second.reasons),
+                supporting_fields=_merge_supporting_fields(
+                    first.supporting_fields,
+                    second.supporting_fields,
+                ),
+                candidate_id=first.candidate_id,
+                accepted=True,
+                raw={
+                    "first": first.raw,
+                    "second": second.raw,
+                    "first_confidence": first.confidence,
+                    "second_confidence": second.confidence,
+                },
+            )
+        )
+
+    for key in sorted(set(first_by_key) ^ set(second_by_key)):
+        match = first_by_key.get(key) or second_by_key[key]
+        diagnostics.append(
+            GraphDiagnostic(
+                stage="llm_match",
+                severity="info",
+                code="no_consensus_match",
+                message="LLM match did not appear in both order-swapped runs.",
+                skill_id=match.source_id,
+                details={"match": match.to_dict()},
+            )
+        )
+
+    return consensus, diagnostics
+
+
+def _match_key(match: LLMMatch) -> tuple[str, str, str, Optional[str]]:
+    return (
+        match.source_id,
+        match.target_id,
+        match.relation_type,
+        match.candidate_id,
+    )
+
+
+def _dedupe_strings(values: List[str]) -> List[str]:
+    seen = set()
+    result = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _merge_supporting_fields(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(left)
+    for key, value in right.items():
+        if key not in merged:
+            merged[key] = value
+            continue
+        if isinstance(merged[key], list) and isinstance(value, list):
+            merged[key] = _dedupe_strings([str(item) for item in merged[key] + value])
+    return merged
+
+
 def _build_llm_context(
     registry: SkillRegistry,
     candidates: List[RelationCandidate],
+    *,
+    reverse_skill_order: bool = False,
 ) -> Dict[str, Any]:
-    skill_ids = sorted(
-        set(candidate.source_id for candidate in candidates).union(
-            candidate.target_id for candidate in candidates
-        )
+    skill_ids = _ordered_skill_ids_for_candidates(
+        candidates,
+        reverse_skill_order=reverse_skill_order,
     )
     skills = [registry.skills[skill_id] for skill_id in skill_ids]
     candidate_payload = [candidate.to_dict() for candidate in candidates]
@@ -427,6 +580,24 @@ def _build_llm_context(
             )
         ).hexdigest(),
     }
+
+
+def _ordered_skill_ids_for_candidates(
+    candidates: List[RelationCandidate],
+    *,
+    reverse_skill_order: bool,
+) -> List[str]:
+    ordered: List[str] = []
+    for candidate in candidates:
+        pair = (
+            [candidate.target_id, candidate.source_id]
+            if reverse_skill_order
+            else [candidate.source_id, candidate.target_id]
+        )
+        for skill_id in pair:
+            if skill_id not in ordered:
+                ordered.append(skill_id)
+    return ordered
 
 
 def _skill_context(skill: SkillRepresentation) -> Dict[str, Any]:
@@ -449,18 +620,20 @@ Input contains:
 - candidates: deterministic relation candidates.
 - allowed_relation_types.
 
-For each candidate, decide whether the hinted relation is valid. Do not invent
-new skills, relation types, or candidate pairs. If a candidate direction is
-wrong, omit it or return it with low confidence and a reason.
+For each candidate pair, decide which relation_hints are valid. A single
+candidate may produce multiple matches, for example both similar_to and
+substitute_for. Do not invent new skills, relation types, or candidate pairs.
+If a candidate direction is wrong, omit it or return it with low confidence
+and a reason.
 
 Return:
 {
   "matches": [
     {
-      "candidate_id": "source->target:relation",
-      "source_id": "source",
-      "target_id": "target",
-      "relation_type": "can_feed|similar_to|substitute_for|composes_with",
+      "candidate_id": "skill_a<->skill_b",
+      "source_id": "directed source skill id",
+      "target_id": "directed target skill id",
+      "relation_type": "can_feed|similar_to|substitute_for",
       "confidence": 0.0-1.0,
       "method": "llm_ontology_match",
       "reasons": ["short evidence-based reason"],
@@ -478,5 +651,4 @@ Relation meanings:
 - can_feed: source output can satisfy target input.
 - similar_to: skills have similar purpose or capability.
 - substitute_for: source can plausibly replace target in similar contexts.
-- composes_with: source naturally precedes target in a workflow.
 """

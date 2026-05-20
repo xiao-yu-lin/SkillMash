@@ -10,17 +10,6 @@ from skillmash.graph.models import ALLOWED_RELATION_TYPES, RelationCandidate, Sk
 from skillmash.representation.models import ArtifactSpec, ParameterSpec, SkillRepresentation
 
 
-DEFAULT_TASK_TRANSITIONS = {
-    ("search", "summarize"),
-    ("search", "analyze"),
-    ("extract", "analyze"),
-    ("analyze", "write"),
-    ("write", "generate"),
-    ("write", "convert"),
-    ("summarize", "write"),
-    ("generate", "convert"),
-}
-
 PRIORITY_RANK = {"high": 3, "medium": 2, "low": 1}
 
 
@@ -31,19 +20,16 @@ class CandidateGenerator:
         self,
         *,
         max_candidates_per_skill_relation: int = 12,
-        task_transitions: Iterable[Tuple[str, str]] = DEFAULT_TASK_TRANSITIONS,
     ) -> None:
         self.max_candidates_per_skill_relation = max_candidates_per_skill_relation
-        self.task_transitions = set(task_transitions)
 
     def generate(self, registry: SkillRegistry) -> List[RelationCandidate]:
         skills = registry.ordered_skills()
         indexes = _CandidateIndexes.from_skills(skills)
-        candidates: Dict[Tuple[str, str, str], RelationCandidate] = {}
+        candidates: Dict[Tuple[str, str], RelationCandidate] = {}
 
         self._add_exact_io_candidates(indexes, candidates)
         self._add_compatible_type_candidates(skills, candidates)
-        self._add_task_transition_candidates(indexes, candidates)
         self._add_task_overlap_candidates(indexes, candidates)
         self._add_shape_similarity_candidates(skills, candidates)
         self._add_text_term_candidates(indexes, candidates)
@@ -52,10 +38,9 @@ class CandidateGenerator:
             candidates.values(),
             key=lambda item: (
                 item.source_id,
-                item.relation_hint,
                 -PRIORITY_RANK.get(item.priority, 0),
                 item.target_id,
-                item.candidate_method,
+                ",".join(item.relation_hints),
             ),
         )
         return self._limit_per_skill_relation(ordered)
@@ -63,7 +48,7 @@ class CandidateGenerator:
     def _add_exact_io_candidates(
         self,
         indexes: "_CandidateIndexes",
-        candidates: MutableMapping[Tuple[str, str, str], RelationCandidate],
+        candidates: MutableMapping[Tuple[str, str], RelationCandidate],
     ) -> None:
         for name in sorted(set(indexes.by_output_name) & set(indexes.by_input_name)):
             for source_id in sorted(indexes.by_output_name[name]):
@@ -75,8 +60,8 @@ class CandidateGenerator:
                         RelationCandidate(
                             source_id=source_id,
                             target_id=target_id,
-                            relation_hint="can_feed",
-                            candidate_method="exact_io_match",
+                            relation_hints=["can_feed"],
+                            candidate_methods=["exact_io_match"],
                             priority="high",
                             evidence={
                                 "matched_terms": [name],
@@ -99,7 +84,7 @@ class CandidateGenerator:
     def _add_compatible_type_candidates(
         self,
         skills: List[SkillRepresentation],
-        candidates: MutableMapping[Tuple[str, str, str], RelationCandidate],
+        candidates: MutableMapping[Tuple[str, str], RelationCandidate],
     ) -> None:
         for source in skills:
             source_terms = _skill_terms(source)
@@ -121,8 +106,8 @@ class CandidateGenerator:
                             RelationCandidate(
                                 source_id=source.id,
                                 target_id=target.id,
-                                relation_hint="can_feed",
-                                candidate_method="compatible_type_match",
+                                relation_hints=["can_feed"],
+                                candidate_methods=["compatible_type_match"],
                                 priority="medium",
                                 evidence={
                                     "matched_terms": shared_terms,
@@ -133,35 +118,10 @@ class CandidateGenerator:
                             ),
                         )
 
-    def _add_task_transition_candidates(
-        self,
-        indexes: "_CandidateIndexes",
-        candidates: MutableMapping[Tuple[str, str, str], RelationCandidate],
-    ) -> None:
-        for source_task, target_task in sorted(self.task_transitions):
-            for source_id in sorted(indexes.by_task.get(source_task, [])):
-                for target_id in sorted(indexes.by_task.get(target_task, [])):
-                    if source_id == target_id:
-                        continue
-                    self._merge_candidate(
-                        candidates,
-                        RelationCandidate(
-                            source_id=source_id,
-                            target_id=target_id,
-                            relation_hint="composes_with",
-                            candidate_method="task_transition_match",
-                            priority="medium",
-                            evidence={
-                                "source_tasks": [source_task],
-                                "target_tasks": [target_task],
-                            },
-                        ),
-                    )
-
     def _add_task_overlap_candidates(
         self,
         indexes: "_CandidateIndexes",
-        candidates: MutableMapping[Tuple[str, str, str], RelationCandidate],
+        candidates: MutableMapping[Tuple[str, str], RelationCandidate],
     ) -> None:
         for task, skill_ids in sorted(indexes.by_task.items()):
             ids = sorted(skill_ids)
@@ -175,8 +135,8 @@ class CandidateGenerator:
                             RelationCandidate(
                                 source_id=left,
                                 target_id=right,
-                                relation_hint="similar_to",
-                                candidate_method="task_overlap_match",
+                                relation_hints=["similar_to"],
+                                candidate_methods=["task_overlap_match"],
                                 priority="medium",
                                 evidence={"shared_tasks": [task]},
                             ),
@@ -185,7 +145,7 @@ class CandidateGenerator:
     def _add_shape_similarity_candidates(
         self,
         skills: List[SkillRepresentation],
-        candidates: MutableMapping[Tuple[str, str, str], RelationCandidate],
+        candidates: MutableMapping[Tuple[str, str], RelationCandidate],
     ) -> None:
         signatures = {skill.id: _io_signature(skill) for skill in skills}
         for source in skills:
@@ -208,8 +168,8 @@ class CandidateGenerator:
                         RelationCandidate(
                             source_id=left,
                             target_id=right,
-                            relation_hint="substitute_for",
-                            candidate_method="shape_similarity_match",
+                            relation_hints=["substitute_for"],
+                            candidate_methods=["shape_similarity_match"],
                             priority="medium",
                             evidence={
                                 "shared_input_shape": shared_inputs,
@@ -221,7 +181,7 @@ class CandidateGenerator:
     def _add_text_term_candidates(
         self,
         indexes: "_CandidateIndexes",
-        candidates: MutableMapping[Tuple[str, str, str], RelationCandidate],
+        candidates: MutableMapping[Tuple[str, str], RelationCandidate],
     ) -> None:
         for term, skill_ids in sorted(indexes.by_text_term.items()):
             ids = sorted(skill_ids)
@@ -237,8 +197,8 @@ class CandidateGenerator:
                             RelationCandidate(
                                 source_id=left,
                                 target_id=right,
-                                relation_hint="similar_to",
-                                candidate_method="text_term_match",
+                                relation_hints=["similar_to"],
+                                candidate_methods=["text_term_match"],
                                 priority="low",
                                 evidence={"matched_terms": [term]},
                             ),
@@ -246,15 +206,29 @@ class CandidateGenerator:
 
     def _merge_candidate(
         self,
-        candidates: MutableMapping[Tuple[str, str, str], RelationCandidate],
+        candidates: MutableMapping[Tuple[str, str], RelationCandidate],
         candidate: RelationCandidate,
     ) -> None:
-        if candidate.relation_hint not in ALLOWED_RELATION_TYPES:
+        relation_hints = [
+            hint for hint in candidate.relation_hints if hint in ALLOWED_RELATION_TYPES
+        ]
+        if not relation_hints:
             return
-        key = (candidate.source_id, candidate.target_id, candidate.relation_hint)
+        key = tuple(sorted((candidate.source_id, candidate.target_id)))
+        direction_key = f"{candidate.source_id}->{candidate.target_id}"
+        candidate_evidence = {
+            "directions": {direction_key: candidate.evidence},
+        }
         existing = candidates.get(key)
         if existing is None:
-            candidates[key] = candidate
+            candidates[key] = RelationCandidate(
+                source_id=candidate.source_id,
+                target_id=candidate.target_id,
+                relation_hints=sorted(set(relation_hints)),
+                candidate_methods=sorted(set(candidate.candidate_methods)),
+                priority=candidate.priority,
+                evidence=candidate_evidence,
+            )
             return
 
         priority = (
@@ -263,16 +237,14 @@ class CandidateGenerator:
             > PRIORITY_RANK.get(existing.priority, 0)
             else existing.priority
         )
-        evidence = _merge_evidence(existing.evidence, candidate.evidence)
-        methods = set(evidence.get("candidate_methods", []))
-        methods.add(existing.candidate_method)
-        methods.add(candidate.candidate_method)
-        evidence["candidate_methods"] = sorted(methods)
+        evidence = _merge_directional_evidence(existing.evidence, candidate_evidence)
         candidates[key] = RelationCandidate(
             source_id=existing.source_id,
             target_id=existing.target_id,
-            relation_hint=existing.relation_hint,
-            candidate_method=existing.candidate_method,
+            relation_hints=sorted(set(existing.relation_hints) | set(relation_hints)),
+            candidate_methods=sorted(
+                set(existing.candidate_methods) | set(candidate.candidate_methods)
+            ),
             priority=priority,
             evidence=evidence,
         )
@@ -280,9 +252,9 @@ class CandidateGenerator:
     def _limit_per_skill_relation(
         self, candidates: List[RelationCandidate]
     ) -> List[RelationCandidate]:
-        buckets: Dict[Tuple[str, str], List[RelationCandidate]] = defaultdict(list)
+        buckets: Dict[str, List[RelationCandidate]] = defaultdict(list)
         for candidate in candidates:
-            buckets[(candidate.source_id, candidate.relation_hint)].append(candidate)
+            buckets[candidate.source_id].append(candidate)
 
         limited: List[RelationCandidate] = []
         for key in sorted(buckets):
@@ -292,7 +264,7 @@ class CandidateGenerator:
                     key=lambda item: (
                         -PRIORITY_RANK.get(item.priority, 0),
                         item.target_id,
-                        item.candidate_method,
+                        ",".join(item.relation_hints),
                     ),
                 )[: self.max_candidates_per_skill_relation]
             )
@@ -300,9 +272,9 @@ class CandidateGenerator:
             limited,
             key=lambda item: (
                 item.source_id,
-                item.relation_hint,
                 -PRIORITY_RANK.get(item.priority, 0),
                 item.target_id,
+                ",".join(item.relation_hints),
             ),
         )
 
@@ -347,6 +319,21 @@ def _merge_evidence(left: Dict[str, object], right: Dict[str, object]) -> Dict[s
             continue
         if isinstance(merged[key], list) and isinstance(value, list):
             merged[key] = _dedupe_list(merged[key] + value)
+    return merged
+
+
+def _merge_directional_evidence(
+    left: Dict[str, object],
+    right: Dict[str, object],
+) -> Dict[str, object]:
+    merged = dict(left)
+    directions = dict(merged.get("directions", {}))
+    for direction, evidence in dict(right.get("directions", {})).items():
+        if direction in directions and isinstance(directions[direction], dict) and isinstance(evidence, dict):
+            directions[direction] = _merge_evidence(directions[direction], evidence)
+        else:
+            directions[direction] = evidence
+    merged["directions"] = directions
     return merged
 
 

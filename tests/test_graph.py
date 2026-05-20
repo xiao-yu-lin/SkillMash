@@ -17,24 +17,31 @@ class AcceptingMatcher:
     def match(self, registry, candidates):
         matches = []
         for candidate in candidates:
-            if candidate.relation_hint != "can_feed":
+            if "can_feed" not in candidate.relation_hints:
+                continue
+            for direction, evidence in candidate.evidence.get("directions", {}).items():
+                if "source_outputs" not in evidence or "target_inputs" not in evidence:
+                    continue
+                source_id, target_id = direction.split("->", 1)
+                break
+            else:
                 continue
             matches.append(
                 LLMMatch(
-                    source_id=candidate.source_id,
-                    target_id=candidate.target_id,
-                    relation_type=candidate.relation_hint,
+                    source_id=source_id,
+                    target_id=target_id,
+                    relation_type="can_feed",
                     confidence=0.95,
                     method="test_matcher",
                     reasons=["candidate accepted"],
                     supporting_fields={
                         "source_outputs": [
                             item["name"]
-                            for item in candidate.evidence.get("source_outputs", [])
+                            for item in evidence.get("source_outputs", [])
                         ],
                         "target_inputs": [
                             item["name"]
-                            for item in candidate.evidence.get("target_inputs", [])
+                            for item in evidence.get("target_inputs", [])
                         ],
                     },
                     candidate_id=candidate.key,
@@ -56,12 +63,13 @@ def test_candidate_generator_finds_exact_io_can_feed_candidate() -> None:
         for candidate in candidates
         if candidate.source_id == "web_search"
         and candidate.target_id == "summarize_text"
-        and candidate.relation_hint == "can_feed"
+        and "can_feed" in candidate.relation_hints
     ]
     assert len(exact) == 1
-    assert exact[0].candidate_method == "exact_io_match"
+    assert "exact_io_match" in exact[0].candidate_methods
     assert exact[0].priority == "high"
-    assert "search_results" in exact[0].evidence["matched_terms"]
+    evidence = exact[0].evidence["directions"]["web_search->summarize_text"]
+    assert "search_results" in evidence["matched_terms"]
 
 
 def test_validate_llm_matches_accepts_candidate_backed_match() -> None:
@@ -74,7 +82,7 @@ def test_validate_llm_matches_accepts_candidate_backed_match() -> None:
         for item in candidates
         if item.source_id == "web_search"
         and item.target_id == "summarize_text"
-        and item.relation_hint == "can_feed"
+        and "can_feed" in item.relation_hints
     )
 
     matches, diagnostics = validate_llm_matches(
@@ -116,8 +124,11 @@ def test_graph_builder_pipeline_writes_expected_artifacts(tmp_path: Path) -> Non
 
     edge_types = {(edge.source, edge.target, edge.type) for edge in result.graph.edges}
     assert ("skill:web_search", "skill:summarize_text", "can_feed") in edge_types
-    assert ("skill:web_search", "artifact:search_results", "produces") in edge_types
-    assert ("artifact:search_results", "skill:summarize_text", "consumes") in edge_types
+    assert {node.type for node in result.graph.nodes} == {"skill"}
+    web_search_node = next(
+        node for node in result.graph.nodes if node.id == "skill:web_search"
+    )
+    assert web_search_node.properties["outputs"][0]["name"] == "search_results"
 
     write_graph_build_result(result, tmp_path)
 

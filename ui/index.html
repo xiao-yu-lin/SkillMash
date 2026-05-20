@@ -14,9 +14,6 @@
       --text: #f2f4f8;
       --muted: #a8b0bf;
       --skill: #4db6ac;
-      --artifact: #ffb84d;
-      --task: #73a7ff;
-      --data: #d87bff;
       --edge: #7d8797;
       --active: #ffffff;
       --danger: #ff6b6b;
@@ -161,6 +158,11 @@
       height: 36px;
       padding: 0 10px;
       outline: 0;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--skill);
     }
 
     button {
@@ -373,11 +375,16 @@
 
       <div class="section stack">
         <h2>筛选</h2>
-        <input id="searchInput" type="search" placeholder="搜索 Skill、Artifact、Task">
+        <input id="searchInput" type="search" placeholder="搜索 Skill、输入、输出、任务">
         <select id="edgeTypeSelect" aria-label="边类型">
           <option value="all">全部边类型</option>
         </select>
-        <label class="check"><input id="skillsOnly" type="checkbox"> 只看 Skill 之间的关系</label>
+        <label class="check">
+          最低置信度
+          <span id="confidenceValue">0%</span>
+        </label>
+        <input id="confidenceThreshold" type="range" min="0" max="100" value="0" step="1" aria-label="最低置信度">
+        <label class="check"><input id="skillsOnly" type="checkbox" checked> 只看 Skill 之间的关系</label>
         <label class="check"><input id="hideLowDegree" type="checkbox"> 隐藏孤立低关联节点</label>
       </div>
 
@@ -385,9 +392,9 @@
         <h2>图例</h2>
         <div class="legend">
           <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:var(--skill)"></i> Skill</span><span id="legendSkill">0</span></div>
-          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:var(--artifact)"></i> Artifact</span><span id="legendArtifact">0</span></div>
-          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:var(--task)"></i> Task</span><span id="legendTask">0</span></div>
-          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:var(--data)"></i> Data Type</span><span id="legendData">0</span></div>
+          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#ffffff"></i> can_feed</span><span>关系</span></div>
+          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#73a7ff"></i> similar_to</span><span>关系</span></div>
+          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#d87bff"></i> substitute_for</span><span>关系</span></div>
         </div>
       </div>
 
@@ -433,12 +440,11 @@
       skillCount: document.getElementById("skillCount"),
       visibleCount: document.getElementById("visibleCount"),
       legendSkill: document.getElementById("legendSkill"),
-      legendArtifact: document.getElementById("legendArtifact"),
-      legendTask: document.getElementById("legendTask"),
-      legendData: document.getElementById("legendData"),
       statusPill: document.getElementById("statusPill"),
       searchInput: document.getElementById("searchInput"),
       edgeTypeSelect: document.getElementById("edgeTypeSelect"),
+      confidenceThreshold: document.getElementById("confidenceThreshold"),
+      confidenceValue: document.getElementById("confidenceValue"),
       skillsOnly: document.getElementById("skillsOnly"),
       hideLowDegree: document.getElementById("hideLowDegree"),
       nodeList: document.getElementById("nodeList"),
@@ -453,9 +459,10 @@
 
     const colors = {
       skill: "#4db6ac",
-      artifact: "#ffb84d",
-      task: "#73a7ff",
-      data_type: "#d87bff",
+      input: "#4db6ac",
+      output: "#4db6ac",
+      task: "#4db6ac",
+      data_type: "#4db6ac",
       unknown: "#a8b0bf"
     };
 
@@ -479,14 +486,16 @@
 
     function typeFromId(id) {
       if (id.startsWith("skill:")) return "skill";
-      if (id.startsWith("artifact:")) return "artifact";
+      if (id.startsWith("input:")) return "input";
+      if (id.startsWith("output:")) return "output";
+      if (id.startsWith("artifact:")) return "output";
       if (id.startsWith("task:")) return "task";
       if (id.startsWith("type:")) return "data_type";
       return "skill";
     }
 
     function labelFromId(id) {
-      return id.replace(/^(skill:|artifact:|task:|type:)/, "");
+      return id.replace(/^(skill:|input:|output:|artifact:|task:|type:)/, "");
     }
 
     function normalizeNode(raw, index) {
@@ -711,17 +720,20 @@
     function applyFilters() {
       const query = els.searchInput.value.trim().toLowerCase();
       const edgeType = els.edgeTypeSelect.value;
+      const minConfidence = Number(els.confidenceThreshold.value || 0) / 100;
+      els.confidenceValue.textContent = `${Math.round(minConfidence * 100)}%`;
       const skillsOnly = els.skillsOnly.checked;
       const hideLow = els.hideLowDegree.checked;
       const nodeById = new Map(graph.nodes.map(node => [node.id, node]));
       let edges = graph.edges.filter(edge => {
         if (edgeType !== "all" && edge.type !== edgeType) return false;
+        if (edge.confidence < minConfidence) return false;
         const source = nodeById.get(edge.source);
         const target = nodeById.get(edge.target);
         if (!source || !target) return false;
         if (skillsOnly && (source.type !== "skill" || target.type !== "skill")) return false;
         if (query) {
-          const haystack = `${source.label} ${source.id} ${target.label} ${target.id} ${edge.type}`.toLowerCase();
+          const haystack = `${nodeSearchText(source)} ${nodeSearchText(target)} ${edge.type}`.toLowerCase();
           return haystack.includes(query);
         }
         return true;
@@ -737,7 +749,7 @@
         if (skillsOnly && node.type !== "skill") return false;
         if (hideLow && node.degree <= 1) return false;
         if (!query) return ids.has(node.id) || graph.edges.length === 0;
-        return ids.has(node.id) || `${node.label} ${node.id}`.toLowerCase().includes(query);
+        return ids.has(node.id) || nodeSearchText(node).toLowerCase().includes(query);
       });
 
       const visibleIds = new Set(nodes.map(node => node.id));
@@ -759,9 +771,6 @@
       els.skillCount.textContent = counts.skill || 0;
       els.visibleCount.textContent = visible.nodes.length;
       els.legendSkill.textContent = counts.skill || 0;
-      els.legendArtifact.textContent = counts.artifact || 0;
-      els.legendTask.textContent = counts.task || 0;
-      els.legendData.textContent = counts.data_type || 0;
       els.statusPill.textContent = visible.nodes.length ? `${visible.nodes.length} nodes / ${visible.edges.length} edges` : "没有可显示的节点";
     }
 
@@ -781,6 +790,18 @@
       `).join("");
     }
 
+    function nodeSearchText(node) {
+      const props = node.properties || {};
+      return [
+        node.label,
+        node.id,
+        props.description,
+        ...(props.tasks || []),
+        ...(props.inputs || []).flatMap(item => [item.name, item.type, item.description]),
+        ...(props.outputs || []).flatMap(item => [item.name, item.type, item.description])
+      ].filter(Boolean).join(" ");
+    }
+
     function renderDetails() {
       if (!selectedNode) {
         els.detailPanel.innerHTML = '<div class="empty">点击一个节点查看详情。</div>';
@@ -790,8 +811,12 @@
 
       const props = selectedNode.properties || {};
       const description = props.description ? `<div class="detail-text">${escapeHtml(props.description)}</div>` : "";
-      const tags = [...(props.skill_tags || []), ...(props.data_tags || [])].slice(0, 16);
+      const tags = [...(props.tasks || []), ...(props.skill_tags || []), ...(props.data_tags || [])].slice(0, 16);
       const tagsHtml = tags.length ? `<div>${tags.map(tag => `<span class="pill">${escapeHtml(tag)}</span>`).join(" ")}</div>` : "";
+      const ioHtml = selectedNode.type === "skill" ? `
+        ${renderIoList("输入", props.inputs || [])}
+        ${renderIoList("输出", props.outputs || [])}
+      ` : "";
       els.detailPanel.innerHTML = `
         <div>
           <div class="detail-title">${escapeHtml(selectedNode.label)}</div>
@@ -804,6 +829,7 @@
         </div>
         ${description}
         ${tagsHtml}
+        ${ioHtml}
       `;
 
       const related = graph.edges
@@ -815,6 +841,20 @@
         const other = graph.nodes.find(node => node.id === otherId);
         return `<div class="item" data-node-id="${escapeHtml(otherId)}">${direction} ${escapeHtml(other?.label || labelFromId(otherId))}<small>${escapeHtml(edge.type)} · ${Math.round(edge.confidence * 100)}%</small></div>`;
       }).join("") : '<div class="empty">没有关联边。</div>';
+    }
+
+    function renderIoList(title, items) {
+      if (!items.length) return "";
+      return `
+        <div class="kv">
+          <div><span>${escapeHtml(title)}</span><strong>${items.length}</strong></div>
+        </div>
+        <div>
+          ${items.slice(0, 12).map(item => `
+            <span class="pill">${escapeHtml(item.name || "unknown")}:${escapeHtml(item.type || "unknown")}</span>
+          `).join(" ")}
+        </div>
+      `;
     }
 
     function tick() {
@@ -950,12 +990,11 @@
     }
 
     function edgeColor(type) {
-      if (type === "produces") return "#ffb84d";
-      if (type === "consumes") return "#4db6ac";
+      if (type === "has_output") return "#4db6ac";
+      if (type === "requires_input") return "#4db6ac";
       if (type === "can_feed") return "#ffffff";
       if (type === "similar_to") return "#73a7ff";
       if (type === "substitute_for") return "#d87bff";
-      if (type === "composes_with") return "#f07178";
       return "#7d8797";
     }
 
@@ -1078,7 +1117,7 @@
       if (node) selectNode(node);
     });
 
-    [els.searchInput, els.edgeTypeSelect, els.skillsOnly, els.hideLowDegree].forEach(el => {
+    [els.searchInput, els.edgeTypeSelect, els.confidenceThreshold, els.skillsOnly, els.hideLowDegree].forEach(el => {
       el.addEventListener("input", applyFilters);
       el.addEventListener("change", applyFilters);
     });

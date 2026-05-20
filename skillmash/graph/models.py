@@ -10,7 +10,7 @@ from skillmash.representation.models import SkillRepresentation
 
 
 ALLOWED_RELATION_TYPES = frozenset(
-    {"can_feed", "similar_to", "substitute_for", "composes_with"}
+    {"can_feed", "similar_to", "substitute_for"}
 )
 
 
@@ -49,26 +49,27 @@ class SkillRegistry:
 
 @dataclass(frozen=True)
 class RelationCandidate:
-    """A cheap, deterministic Skill-Skill relation candidate for LLM review."""
+    """A cheap, deterministic Skill pair candidate for LLM review."""
 
     source_id: str
     target_id: str
-    relation_hint: str
-    candidate_method: str
+    relation_hints: List[str]
+    candidate_methods: List[str]
     priority: str
     evidence: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def key(self) -> str:
-        return f"{self.source_id}->{self.target_id}:{self.relation_hint}"
+        left, right = sorted((self.source_id, self.target_id))
+        return f"{left}<->{right}"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "candidate_id": self.key,
             "source_id": self.source_id,
             "target_id": self.target_id,
-            "relation_hint": self.relation_hint,
-            "candidate_method": self.candidate_method,
+            "relation_hints": list(self.relation_hints),
+            "candidate_methods": list(self.candidate_methods),
             "priority": self.priority,
             "evidence": self.evidence,
         }
@@ -206,10 +207,9 @@ class BuildManifest:
     )
     thresholds: Dict[str, float] = field(
         default_factory=lambda: {
-            "can_feed": 0.8,
-            "similar_to": 0.75,
-            "substitute_for": 0.85,
-            "composes_with": 0.75,
+            "can_feed": 0.0,
+            "similar_to": 0.0,
+            "substitute_for": 0.0,
         }
     )
     llm: Dict[str, Any] = field(default_factory=dict)

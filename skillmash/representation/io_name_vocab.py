@@ -272,6 +272,13 @@ class HeuristicIONameResolver(HeuristicBaseResolver):
             vocabulary=vocabulary,
         )
 
+    def resolve_many(
+        self,
+        candidates: List[IONameCandidate],
+        vocabulary: IONameVocabulary,
+    ) -> Dict[str, IONameResolution]:
+        return self.resolve_many_base(candidates, vocabulary)
+
 
 class OpenAICompatibleIONameResolver:
     """LLM-backed resolver for unseen io_name_vocab terms."""
@@ -284,12 +291,19 @@ class OpenAICompatibleIONameResolver:
         self.config = config
         self.client = create_openai_client(config)
         self.progress = progress
+        self._cache: Dict[str, IONameResolution] = {}
+        self._cache_lock = RLock()
 
     def resolve(
         self,
         candidate: IONameCandidate,
         vocabulary: IONameVocabulary,
     ) -> IONameResolution:
+        with self._cache_lock:
+            cached = self._cache.get(candidate.token)
+        if cached is not None:
+            return cached
+
         context = {
             "candidate": candidate.to_dict(),
             "vocabulary": vocabulary.resolver_context(),
@@ -342,8 +356,113 @@ class OpenAICompatibleIONameResolver:
                 f"content_prefix={content[:1000]!r}"
             ) from exc
         resolution = _resolution_from_payload(payload, vocabulary)
+        with self._cache_lock:
+            self._cache[candidate.token] = resolution
         self._emit_progress("done", candidate, resolution)
         return resolution
+
+    def resolve_many(
+        self,
+        candidates: List[IONameCandidate],
+        vocabulary: IONameVocabulary,
+    ) -> Dict[str, IONameResolution]:
+        unique_candidates: List[IONameCandidate] = []
+        seen: Set[str] = set()
+        resolutions: Dict[str, IONameResolution] = {}
+        for candidate in candidates:
+            if not candidate.token or candidate.token in seen:
+                continue
+            seen.add(candidate.token)
+            with self._cache_lock:
+                cached = self._cache.get(candidate.token)
+            if cached is not None:
+                resolutions[candidate.token] = cached
+                continue
+            unique_candidates.append(candidate)
+
+        if not unique_candidates:
+            return resolutions
+
+        context = {
+            "candidates": [candidate.to_dict() for candidate in unique_candidates],
+            "vocabulary": vocabulary.resolver_context(),
+            "allowed_actions": [
+                "alias_existing",
+                "create_new",
+                "merge_existing",
+                "exclude_non_runtime",
+            ],
+            "rules": [
+                "Return exactly one resolution for every candidate token.",
+                "If a candidate is only for logs, statistics, telemetry, tracing, or original-copy bookkeeping, use exclude_non_runtime.",
+                "If a candidate is synonymous with an existing term, use alias_existing and set target to that term.",
+                "If the vocabulary is not full and a candidate is a genuinely new runtime semantic role, use create_new.",
+                "If the vocabulary is full, do not use create_new; use merge_existing or exclude_non_runtime.",
+                "Use the candidate list as one Skill's combined input/output context; resolve names consistently across directions.",
+            ],
+        }
+        for candidate in unique_candidates:
+            self._emit_progress("start", candidate, None)
+        try:
+            response = self.client.chat.completions.create(
+                model=self.config.model,
+                temperature=self.config.temperature,
+                response_format={"type": "json_object"},
+                messages=[
+                    {
+                        "role": "system",
+                        "content": _IO_NAME_BATCH_RESOLVER_PROMPT,
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(context, ensure_ascii=False, indent=2),
+                    },
+                ],
+            )
+        except Exception as exc:
+            raise RuntimeError(f"IO name vocabulary batch LLM request failed: {exc}") from exc
+
+        choice = response.choices[0]
+        content = extract_message_content(choice.message)
+        if not content:
+            raise RuntimeError(
+                "IO name vocabulary batch LLM response content is empty. "
+                f"finish_reason={getattr(choice, 'finish_reason', None)!r}; "
+                f"message={safe_model_dump(choice.message)}"
+            )
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "IO name vocabulary batch LLM response is not valid JSON. "
+                f"content_prefix={content[:1000]!r}"
+            ) from exc
+
+        payload_items = payload.get("resolutions", [])
+        if not isinstance(payload_items, list):
+            raise RuntimeError("IO name vocabulary batch LLM response must contain resolutions array.")
+
+        remaining = {candidate.token for candidate in unique_candidates}
+        for item in payload_items:
+            if not isinstance(item, dict):
+                continue
+            token = str(item.get("token") or "").strip()
+            if token not in remaining:
+                continue
+            resolution = _resolution_from_payload(item, vocabulary)
+            resolutions[token] = resolution
+            with self._cache_lock:
+                self._cache[token] = resolution
+            remaining.remove(token)
+            candidate = next(candidate for candidate in unique_candidates if candidate.token == token)
+            self._emit_progress("done", candidate, resolution)
+
+        if remaining:
+            raise RuntimeError(
+                "IO name vocabulary batch LLM response omitted resolutions for tokens: "
+                + ", ".join(sorted(remaining))
+            )
+        return resolutions
 
     def _emit_progress(
         self,
@@ -408,4 +527,24 @@ Return JSON only:
 
 Use input/output names as semantic vocab terms for graph linking. The type field
 is only the data representation, not the semantic role.
+"""
+
+_IO_NAME_BATCH_RESOLVER_PROMPT = """Resolve new Skill input/output names against io_name_vocab.
+
+Return JSON only:
+{
+  "resolutions": [
+    {
+      "token": "candidate_token",
+      "action": "alias_existing|create_new|merge_existing|exclude_non_runtime",
+      "target": "existing_or_new_vocab_term_or_null",
+      "confidence": 0.0,
+      "reason": "short explanation"
+    }
+  ]
+}
+
+The candidates come from one Skill's combined inputs and outputs. Use that
+shared context to choose consistent semantic names. The type field is only the
+data representation, not the semantic role.
 """

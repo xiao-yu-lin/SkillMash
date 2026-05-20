@@ -6,6 +6,7 @@ from pathlib import Path
 from skillmash.representation import (
     ArtifactSpec,
     ExtractedSkillSchema,
+    IONameResolution,
     NormalizationConfig,
     ParameterSpec,
     RepresentationExtractor,
@@ -15,6 +16,36 @@ from skillmash.representation import (
     SkillRepresentationNormalizer,
     schema_from_llm_payload,
 )
+
+
+class RecordingIONameResolver:
+    def __init__(self, action: str = "create_new") -> None:
+        self.action = action
+        self.resolve_calls = 0
+        self.resolve_many_calls = 0
+        self.batches = []
+
+    def resolve(self, candidate, vocabulary):
+        self.resolve_calls += 1
+        return IONameResolution(
+            action=self.action,
+            normalized_value=None if self.action == "exclude_non_runtime" else candidate.token,
+            confidence=0.7,
+            reason="single fallback",
+        )
+
+    def resolve_many(self, candidates, vocabulary):
+        self.resolve_many_calls += 1
+        self.batches.append([candidate.token for candidate in candidates])
+        return {
+            candidate.token: IONameResolution(
+                action=self.action,
+                normalized_value=None if self.action == "exclude_non_runtime" else candidate.token,
+                confidence=0.9,
+                reason="batch",
+            )
+            for candidate in candidates
+        }
 
 
 def test_scanner_finds_skill_folders_in_stable_order(tmp_path: Path) -> None:
@@ -195,6 +226,71 @@ def test_normalizer_adds_new_io_name_to_vocab_when_capacity_remains(tmp_path: Pa
     assert result.representation.inputs[0].name == "customer_intent"
     assert normalizer.io_name_vocabulary.lookup("customer_intent") == "customer_intent"
     assert result.decisions[0].method == "create_new"
+
+
+def test_normalizer_batches_unseen_io_names_per_skill(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    resolver = RecordingIONameResolver()
+    extracted = ExtractedSkillSchema(
+        description="Plan a custom route.",
+        inputs=[
+            {"name": "Customer Intent", "type": "text"},
+            {"name": "Operator Secret", "type": "text"},
+        ],
+        outputs=[
+            {"name": "Routing Manifest", "type": "json"},
+            {"name": "Customer Intent", "type": "text"},
+        ],
+    )
+
+    result = SkillRepresentationNormalizer(
+        config=NormalizationConfig(max_vocab_size=32),
+        io_name_resolver=resolver,
+    ).normalize(
+        manifest,
+        extracted,
+    )
+
+    assert resolver.resolve_many_calls == 1
+    assert resolver.resolve_calls == 0
+    assert resolver.batches == [
+        ["customer_intent", "operator_secret", "routing_manifest"]
+    ]
+    assert [item.name for item in result.representation.inputs] == [
+        "customer_intent",
+        "operator_secret",
+    ]
+    assert [item.name for item in result.representation.outputs] == [
+        "routing_manifest",
+        "customer_intent",
+    ]
+
+
+def test_normalizer_caches_unseen_io_name_resolutions(tmp_path: Path) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    resolver = RecordingIONameResolver(action="exclude_non_runtime")
+    normalizer = SkillRepresentationNormalizer(io_name_resolver=resolver)
+    extracted = ExtractedSkillSchema(
+        description="Emit debug details.",
+        inputs=[{"name": "Debug Payload", "type": "json"}],
+        outputs=[],
+    )
+
+    first = normalizer.normalize(_manifest(first_root), extracted)
+    second = normalizer.normalize(_manifest(second_root), extracted)
+
+    assert resolver.resolve_many_calls == 1
+    assert resolver.resolve_calls == 0
+    assert first.representation.inputs == []
+    assert second.representation.inputs == []
+    assert any(
+        decision.method == "exclude_non_runtime"
+        and decision.token == "debug_payload"
+        for decision in second.decisions
+    )
 
 
 def test_normalizer_merges_new_io_name_when_vocab_is_full(tmp_path: Path) -> None:

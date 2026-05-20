@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import RLock
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from skillmash.representation.io_name_vocab import (
@@ -74,6 +75,8 @@ class SkillRepresentationNormalizer:
             )
         )
         self.task_resolver = task_resolver or HeuristicSemanticResolver()
+        self._io_name_resolution_cache: Dict[str, IONameResolution] = {}
+        self._io_name_resolution_cache_lock = RLock()
 
     def normalize(
         self,
@@ -91,6 +94,7 @@ class SkillRepresentationNormalizer:
             identity.description,
             decisions,
         )
+        self._prime_io_name_resolutions(manifest, extracted, identity.id)
         inputs = self._normalize_inputs(
             extracted.inputs,
             manifest,
@@ -146,6 +150,63 @@ class SkillRepresentationNormalizer:
             description=description,
             version=version,
         )
+
+    def _prime_io_name_resolutions(
+        self,
+        manifest: RawSkillManifest,
+        extracted: ExtractedSkillSchema,
+        skill_id: str,
+    ) -> None:
+        candidates: List[IONameCandidate] = []
+        seen: set = set()
+        fields = [
+            ("input", extracted.inputs, self.config.default_input_name, self.config.default_input_type),
+            ("output", extracted.outputs, self.config.default_output_name, self.config.unknown_type),
+        ]
+        for direction, items, default_name, default_type in fields:
+            for raw in items:
+                data = to_dict(raw)
+                raw_name = str(data.get("name") or default_name)
+                raw_type = str(data.get("type") or default_type)
+                token = normalize_parameter_name(raw_name)
+                if (
+                    not token
+                    or token in seen
+                    or self.io_name_vocabulary.lookup(token) is not None
+                ):
+                    continue
+                with self._io_name_resolution_cache_lock:
+                    cached = token in self._io_name_resolution_cache
+                if cached:
+                    continue
+                seen.add(token)
+                candidates.append(
+                    IONameCandidate(
+                        raw_value=raw_name,
+                        token=token,
+                        direction=direction,
+                        data_type=raw_type,
+                        description=str(data.get("description") or ""),
+                        skill_id=skill_id,
+                        path=str(manifest.folder.path),
+                    )
+                )
+        if not candidates:
+            return
+
+        resolve_many = getattr(self.io_name_resolver, "resolve_many", None)
+        if callable(resolve_many):
+            resolutions = resolve_many(candidates, self.io_name_vocabulary)
+        else:
+            resolutions = {
+                candidate.token: self.io_name_resolver.resolve(
+                    candidate,
+                    self.io_name_vocabulary,
+                )
+                for candidate in candidates
+            }
+        with self._io_name_resolution_cache_lock:
+            self._io_name_resolution_cache.update(resolutions)
 
     def _normalize_tasks(
         self,
@@ -560,18 +621,23 @@ class SkillRepresentationNormalizer:
             )
             return existing
 
-        resolution = self.io_name_resolver.resolve(
-            IONameCandidate(
-                raw_value=raw_name,
-                token=token,
-                direction=direction,
-                data_type=raw_type,
-                description=description,
-                skill_id=skill_id,
-                path=str(manifest.folder.path),
-            ),
-            self.io_name_vocabulary,
-        )
+        with self._io_name_resolution_cache_lock:
+            resolution = self._io_name_resolution_cache.get(token)
+        if resolution is None:
+            resolution = self.io_name_resolver.resolve(
+                IONameCandidate(
+                    raw_value=raw_name,
+                    token=token,
+                    direction=direction,
+                    data_type=raw_type,
+                    description=description,
+                    skill_id=skill_id,
+                    path=str(manifest.folder.path),
+                ),
+                self.io_name_vocabulary,
+            )
+            with self._io_name_resolution_cache_lock:
+                self._io_name_resolution_cache[token] = resolution
         normalized = self._apply_io_name_resolution(token, raw_type, description, resolution)
         self._record_decision(
             decisions,

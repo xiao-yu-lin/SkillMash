@@ -77,6 +77,13 @@ class BaseResolver(Protocol):
     def resolve(self, candidate: Any, vocabulary: Any) -> BaseResolution:
         ...
 
+    def resolve_many(
+        self,
+        candidates: List[Any],
+        vocabulary: Any,
+    ) -> Dict[str, BaseResolution]:
+        ...
+
 
 @dataclass
 class BaseVocabTerm:
@@ -313,3 +320,21 @@ class HeuristicBaseResolver:
             reason="Vocabulary is full; merged to the closest existing term.",
             forced_merge=True,
         )
+
+    def resolve_many_base(
+        self,
+        candidates: List[Any],
+        vocabulary: BaseVocabulary,
+    ) -> Dict[str, BaseResolution]:
+        """Resolve a batch locally while preserving one resolution per token."""
+        resolutions: Dict[str, BaseResolution] = {}
+        for candidate in candidates:
+            token = str(getattr(candidate, "token", "") or "")
+            if not token or token in resolutions:
+                continue
+            resolutions[token] = self.resolve_base(
+                token=token,
+                description=str(getattr(candidate, "description", "") or ""),
+                vocabulary=vocabulary,
+            )
+        return resolutions

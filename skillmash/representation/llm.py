@@ -31,32 +31,21 @@ class LLMConfig:
         values = _load_env_file(Path(env_path))
         merged = {**values, **os.environ}
 
-        model = (
-            merged.get("LLM_MODEL")
-            or merged.get("OPENAI_MODEL")
-        )
+        model = merged.get("LLM_MODEL")
         if not model:
             raise RuntimeError(
-                "Missing LLM model. Set OPENAI_MODEL in .env or environment."
+                "Missing LLM model. Set LLM_MODEL in .env or environment."
             )
 
-        api_key = (
-            merged.get("LLM_API_KEY")
-            or merged.get("OPENAI_API_KEY")
-            or ""
-        )
+        api_key = merged.get("LLM_API_KEY") or ""
         if not api_key and not is_local_model_path(model):
             raise RuntimeError(
-                "Missing LLM API key for API mode. Set OPENAI_API_KEY in .env "
-                "or environment, or set OPENAI_MODEL/LLM_MODEL to an "
+                "Missing LLM API key for API mode. Set LLM_API_KEY in .env "
+                "or environment, or set LLM_MODEL to an "
                 "existing local model path to use vLLM offline mode."
             )
 
-        base_url = (
-            merged.get("LLM_BASE_URL")
-            or merged.get("OPENAI_BASE_URL")
-            or cls.base_url
-        )
+        base_url = merged.get("LLM_BASE_URL") or cls.base_url
         temperature = float(merged.get("LLM_TEMPERATURE") or 0)
         timeout_seconds = int(merged.get("LLM_TIMEOUT_SECONDS") or 60)
         max_tokens = int(merged.get("LLM_MAX_TOKENS") or 2048)

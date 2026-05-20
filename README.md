@@ -110,6 +110,12 @@ After representation extraction, build the ontology-driven Skill graph from `rep
 .\.venv\Scripts\python.exe examples\graph_build_demo.py --representations_json OUTPUT\representations.json --out_dir .skillmash\index
 ```
 
+Use concurrent LLM matching calls for larger candidate sets:
+
+```powershell
+.\.venv\Scripts\python.exe examples\graph_build_demo.py --representations_json OUTPUT\representations.json --out_dir .skillmash\index --batch_size 12 --workers 4
+```
+
 The graph builder first generates deterministic relation candidates from normalized `description`, `tasks`, `inputs`, and `outputs`, then asks the LLM to validate those candidates. It writes:
 
 ```text

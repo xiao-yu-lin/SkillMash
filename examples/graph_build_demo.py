@@ -56,6 +56,7 @@ class ConsoleProgress:
                 "llm matching start: "
                 f"candidates={details.get('candidate_count', 0)} "
                 f"batch_size={details.get('batch_size', 0)} "
+                f"workers={details.get('max_workers', 1)} "
                 f"batches={total}"
             )
         elif event == "batch_start":
@@ -114,6 +115,12 @@ def main() -> None:
         default=12,
         help="Number of relation candidates per LLM matching request.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of concurrent LLM matching requests. Defaults to 1.",
+    )
     args = parser.parse_args()
 
     representations_arg = (
@@ -140,6 +147,7 @@ def main() -> None:
     matcher = OpenAICompatibleOntologyMatcher(
         llm_config,
         batch_size=max(1, args.batch_size),
+        max_workers=max(1, args.workers),
         progress=progress.llm,
     )
     progress.log("building graph artifacts")

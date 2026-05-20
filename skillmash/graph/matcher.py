@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Iterable, List, Optional, Protocol
 
 from skillmash.graph.models import (
@@ -56,12 +57,14 @@ class OpenAICompatibleOntologyMatcher:
         config: LLMConfig,
         *,
         batch_size: int = 12,
+        max_workers: int = 1,
         prompt_version: str = "skillmash-graph-match-v1",
         thresholds: Dict[str, float] = DEFAULT_THRESHOLDS,
         progress: Optional[MatchProgress] = None,
     ) -> None:
         self.config = config
         self.batch_size = batch_size
+        self.max_workers = max(1, max_workers)
         self.prompt_version = prompt_version
         self.thresholds = thresholds
         self.progress = progress
@@ -85,65 +88,44 @@ class OpenAICompatibleOntologyMatcher:
             "matching_start",
             0,
             total_batches,
-            {"candidate_count": len(candidate_list), "batch_size": self.batch_size},
+            {
+                "candidate_count": len(candidate_list),
+                "batch_size": self.batch_size,
+                "max_workers": self.max_workers,
+            },
         )
-        for batch_index, start in enumerate(
-            range(0, len(candidate_list), self.batch_size),
-            start=1,
-        ):
-            batch = candidate_list[start : start + self.batch_size]
-            payload = _build_llm_context(registry, batch)
-            self._emit_progress(
-                "batch_start",
-                batch_index,
-                total_batches,
-                {
-                    "candidate_count": len(batch),
-                    "input_sha256": payload["input_sha256"],
-                    "candidate_ids": [candidate.key for candidate in batch],
-                },
+        batches = [
+            (batch_index, candidate_list[start : start + self.batch_size])
+            for batch_index, start in enumerate(
+                range(0, len(candidate_list), self.batch_size),
+                start=1,
             )
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.config.model,
-                    temperature=self.config.temperature,
-                    response_format={"type": "json_object"},
-                    messages=[
-                        {"role": "system", "content": _SYSTEM_PROMPT},
-                        {
-                            "role": "user",
-                            "content": json.dumps(
-                                payload,
-                                ensure_ascii=False,
-                                indent=2,
-                            ),
-                        },
-                    ],
-                )
-            except Exception as exc:
-                raise RuntimeError(f"LLM graph matching request failed: {exc}") from exc
+        ]
+        if self.max_workers == 1 or len(batches) <= 1:
+            results = [
+                self._match_batch(registry, batch, batch_index, total_batches)
+                for batch_index, batch in batches
+            ]
+        else:
+            results = []
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = [
+                    executor.submit(
+                        self._match_batch,
+                        registry,
+                        batch,
+                        batch_index,
+                        total_batches,
+                    )
+                    for batch_index, batch in batches
+                ]
+                for future in as_completed(futures):
+                    results.append(future.result())
 
-            choice = response.choices[0]
-            content = extract_message_content(choice.message)
-            if not content:
-                raise RuntimeError(
-                    "LLM graph matching response content is empty. "
-                    f"finish_reason={getattr(choice, 'finish_reason', None)!r}; "
-                    f"message={safe_model_dump(choice.message)}"
-                )
-            try:
-                raw_payload = json.loads(content)
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    "LLM graph matching response is not valid JSON. "
-                    f"content_prefix={content[:1000]!r}"
-                ) from exc
-            batch_matches, batch_diagnostics = validate_llm_matches(
-                raw_payload,
-                registry,
-                batch,
-                thresholds=self.thresholds,
-            )
+        for batch_index, batch_matches, batch_diagnostics in sorted(
+            results,
+            key=lambda item: item[0],
+        ):
             self.diagnostics.extend(batch_diagnostics)
             matches.extend(batch_matches)
             self._emit_progress(
@@ -178,7 +160,69 @@ class OpenAICompatibleOntologyMatcher:
             "temperature": self.config.temperature,
             "prompt_version": self.prompt_version,
             "batch_size": self.batch_size,
+            "max_workers": self.max_workers,
         }
+
+    def _match_batch(
+        self,
+        registry: SkillRegistry,
+        batch: List[RelationCandidate],
+        batch_index: int,
+        total_batches: int,
+    ) -> tuple[int, List[LLMMatch], List[GraphDiagnostic]]:
+        payload = _build_llm_context(registry, batch)
+        self._emit_progress(
+            "batch_start",
+            batch_index,
+            total_batches,
+            {
+                "candidate_count": len(batch),
+                "input_sha256": payload["input_sha256"],
+                "candidate_ids": [candidate.key for candidate in batch],
+            },
+        )
+        try:
+            response = self.client.chat.completions.create(
+                model=self.config.model,
+                temperature=self.config.temperature,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            payload,
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                    },
+                ],
+            )
+        except Exception as exc:
+            raise RuntimeError(f"LLM graph matching request failed: {exc}") from exc
+
+        choice = response.choices[0]
+        content = extract_message_content(choice.message)
+        if not content:
+            raise RuntimeError(
+                "LLM graph matching response content is empty. "
+                f"finish_reason={getattr(choice, 'finish_reason', None)!r}; "
+                f"message={safe_model_dump(choice.message)}"
+            )
+        try:
+            raw_payload = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "LLM graph matching response is not valid JSON. "
+                f"content_prefix={content[:1000]!r}"
+            ) from exc
+        batch_matches, batch_diagnostics = validate_llm_matches(
+            raw_payload,
+            registry,
+            batch,
+            thresholds=self.thresholds,
+        )
+        return batch_index, batch_matches, batch_diagnostics
 
     def _emit_progress(
         self,

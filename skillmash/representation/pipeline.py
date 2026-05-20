@@ -8,8 +8,10 @@ from typing import Callable, Dict, List, Optional, Union
 
 from skillmash.representation.manifest import SkillManifestParser
 from skillmash.representation.models import (
+    ExtractedSkillSchema,
     ExtractionDiagnostic,
     NormalizationDecision,
+    RawSkillManifest,
     RepresentationExtractionResult,
     SkillSchemaExtractor,
 )
@@ -46,6 +48,9 @@ class RepresentationExtractor:
         folders = self.scanner.scan(skills_root)
         total = len(folders)
         self._emit_progress("scan", 0, total, str(skills_root))
+
+        if self._should_extract_in_batches():
+            return self._extract_all_batched(folders, total)
 
         if self.max_workers == 1:
             for index, folder in enumerate(folders):
@@ -103,3 +108,63 @@ class RepresentationExtractor:
     def _emit_progress(self, stage: str, current: int, total: int, item: str) -> None:
         if self.progress is not None:
             self.progress(stage, current, total, item)
+
+    def _should_extract_in_batches(self) -> bool:
+        return bool(
+            getattr(self.schema_extractor, "use_batch", False)
+            and hasattr(self.schema_extractor, "extract_many")
+        )
+
+    def _extract_all_batched(
+        self,
+        folders,
+        total: int,
+    ) -> RepresentationExtractionResult:
+        manifests_by_index: Dict[int, RawSkillManifest] = {}
+        extracted_by_index: Dict[int, ExtractedSkillSchema] = {}
+        representations_by_index: Dict[int, object] = {}
+        diagnostics: List[ExtractionDiagnostic] = []
+        normalization_decisions: List[NormalizationDecision] = []
+
+        for index, folder in enumerate(folders):
+            current = index + 1
+            self._emit_progress("parse", current, total, folder.relative_path)
+            manifests_by_index[index] = self.parser.parse(folder)
+
+        batch_size = int(getattr(getattr(self.schema_extractor, "config", None), "batch_size", 32))
+        for start in range(0, total, max(1, batch_size)):
+            end = min(total, start + max(1, batch_size))
+            batch_indexes = list(range(start, end))
+            item = f"{start + 1}-{end}/{total}"
+            self._emit_progress("extract_batch", end, total, item)
+            batch_manifests = [manifests_by_index[index] for index in batch_indexes]
+            batch_extracted = self.schema_extractor.extract_many(batch_manifests)
+            if len(batch_extracted) != len(batch_manifests):
+                raise RuntimeError(
+                    "Batch schema extractor returned "
+                    f"{len(batch_extracted)} schemas for {len(batch_manifests)} manifests."
+                )
+            for index, extracted in zip(batch_indexes, batch_extracted):
+                extracted_by_index[index] = extracted
+
+        for index, folder in enumerate(folders):
+            current = index + 1
+            self._emit_progress("normalize", current, total, folder.relative_path)
+            result = self.normalizer.normalize(
+                manifests_by_index[index],
+                extracted_by_index[index],
+            )
+            representations_by_index[index] = result.representation
+            diagnostics.extend(result.diagnostics)
+            normalization_decisions.extend(result.decisions)
+            self._emit_progress("done", current, total, folder.relative_path)
+
+        return RepresentationExtractionResult(
+            representations=[
+                representations_by_index[index] for index in sorted(representations_by_index)
+            ],
+            diagnostics=diagnostics,
+            normalization_decisions=normalization_decisions,
+            io_name_vocab=self.normalizer.io_name_vocabulary.to_dict(),
+            task_vocab=self.normalizer.task_vocabulary.to_dict(),
+        )

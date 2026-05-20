@@ -130,6 +130,8 @@ Confidence thresholds default to `0` so all schema-valid consensus matches are k
 
 The graph builder first generates deterministic relation candidates from normalized `description`, `tasks`, `inputs`, and `outputs`, then asks the LLM to validate those candidates. It writes:
 
+Progress is shown with Rich.
+
 ```text
 .skillmash/index/
   build_manifest.json

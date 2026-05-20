@@ -16,9 +16,7 @@ from skillmash.graph.models import (
 )
 from skillmash.representation.llm import (
     LLMConfig,
-    create_openai_client,
-    extract_message_content,
-    safe_model_dump,
+    create_llm_client,
 )
 from skillmash.representation.models import SkillRepresentation
 
@@ -69,7 +67,7 @@ class OpenAICompatibleOntologyMatcher:
         self.prompt_version = prompt_version
         self.thresholds = thresholds
         self.progress = progress
-        self.client = create_openai_client(config)
+        self.client = create_llm_client(config)
         self.diagnostics: List[GraphDiagnostic] = []
 
     def match(
@@ -162,6 +160,7 @@ class OpenAICompatibleOntologyMatcher:
     def manifest_metadata(self) -> Dict[str, Any]:
         return {
             "model": self.config.model,
+            "backend": self.config.backend,
             "base_url": self.config.base_url,
             "temperature": self.config.temperature,
             "prompt_version": self.prompt_version,
@@ -225,35 +224,16 @@ class OpenAICompatibleOntologyMatcher:
             batch,
             reverse_skill_order=reverse_skill_order,
         )
-        try:
-            response = self.client.chat.completions.create(
-                model=self.config.model,
-                temperature=self.config.temperature,
-                timeout=200,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": json.dumps(
-                            payload,
-                            ensure_ascii=False,
-                            indent=2,
-                        ),
-                    },
-                ],
-            )
-        except Exception as exc:
-            raise RuntimeError(f"LLM graph matching request failed: {exc}") from exc
-
-        choice = response.choices[0]
-        content = extract_message_content(choice.message)
-        if not content:
-            raise RuntimeError(
-                "LLM graph matching response content is empty. "
-                f"finish_reason={getattr(choice, 'finish_reason', None)!r}; "
-                f"message={safe_model_dump(choice.message)}"
-            )
+        content = self.client.complete_json(
+            system_prompt=_SYSTEM_PROMPT,
+            user_content=json.dumps(
+                payload,
+                ensure_ascii=False,
+                indent=2,
+            ),
+            timeout=200,
+            error_context="LLM graph matching",
+        )
         try:
             raw_payload = json.loads(content)
         except json.JSONDecodeError as exc:

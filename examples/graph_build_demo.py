@@ -22,6 +22,22 @@ import time
 from pathlib import Path
 from typing import Any
 
+try:
+    from rich.console import Console
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        SpinnerColumn,
+        TaskProgressColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+except ImportError as exc:
+    raise RuntimeError(
+        "The rich package is required for graph_build_demo.py. "
+        "Install dependencies with `uv sync` or `pip install rich`."
+    ) from exc
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -41,44 +57,73 @@ from skillmash.representation import (  # noqa: E402
 
 
 class ConsoleProgress:
-    """Print graph build progress to stderr."""
+    """Render graph build progress with Rich."""
 
     def __init__(self) -> None:
         self.started_at = time.monotonic()
+        self.console = Console(stderr=True)
+        self.progress = None
+        self.task_id = None
+        self.accepted_count = 0
+        self.match_count = 0
+        self.diagnostics_count = 0
 
     def log(self, message: str) -> None:
         elapsed = time.monotonic() - self.started_at
-        print(f"[graph-build +{elapsed:6.1f}s] {message}", file=sys.stderr, flush=True)
+        self.console.log(f"[graph-build +{elapsed:6.1f}s] {message}")
 
     def llm(self, event: str, current: int, total: int, details: dict[str, Any]) -> None:
         if event == "matching_start":
-            self.log(
-                "llm matching start: "
+            message = (
                 f"candidates={details.get('candidate_count', 0)} "
                 f"batch_size={details.get('batch_size', 0)} "
                 f"workers={details.get('max_workers', 1)} "
-                f"consensus_runs={details.get('consensus_runs', 1)} "
-                f"batches={total}"
+                f"consensus_runs={details.get('consensus_runs', 1)}"
+            )
+            self.accepted_count = 0
+            self.match_count = 0
+            self.diagnostics_count = 0
+            self.progress = Progress(
+                SpinnerColumn(),
+                TextColumn("[bold cyan]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TimeElapsedColumn(),
+                TextColumn("{task.fields[status]}"),
+                console=self.console,
+                transient=False,
+            )
+            self.progress.start()
+            self.task_id = self.progress.add_task(
+                "LLM batches",
+                total=total,
+                status=message,
             )
         elif event == "batch_start":
-            candidate_ids = details.get("candidate_ids", [])
-            preview = ", ".join(candidate_ids[:3])
-            suffix = " ..." if len(candidate_ids) > 3 else ""
-            self.log(
-                "llm batch start: "
-                f"{current}/{total} candidates={details.get('candidate_count', 0)} "
-                f"consensus_runs={details.get('consensus_runs', 1)} "
-                f"input_sha256={details.get('input_sha256')} "
-                f"[{preview}{suffix}]"
-            )
+            if self.progress is not None and self.task_id is not None:
+                self.progress.update(
+                    self.task_id,
+                    status=f"running {current}/{total}",
+                )
         elif event == "batch_done":
-            self.log(
-                "llm batch done: "
-                f"{current}/{total} matches={details.get('match_count', 0)} "
-                f"accepted={details.get('accepted_count', 0)} "
-                f"diagnostics={details.get('diagnostics_count', 0)}"
-            )
+            self.match_count += int(details.get("match_count", 0))
+            self.accepted_count += int(details.get("accepted_count", 0))
+            self.diagnostics_count += int(details.get("diagnostics_count", 0))
+            if self.progress is not None and self.task_id is not None:
+                self.progress.update(
+                    self.task_id,
+                    advance=1,
+                    status=(
+                        f"matches={self.match_count} "
+                        f"accepted={self.accepted_count} "
+                        f"diag={self.diagnostics_count}"
+                    ),
+                )
         elif event == "matching_done":
+            if self.progress is not None:
+                self.progress.stop()
+                self.progress = None
+                self.task_id = None
             self.log(
                 "llm matching done: "
                 f"matches={details.get('match_count', 0)} "

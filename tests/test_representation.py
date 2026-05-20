@@ -518,6 +518,55 @@ def test_representation_extractor_keeps_scan_order_with_workers(tmp_path: Path) 
     ]
 
 
+def test_representation_extractor_uses_batched_schema_extractor(tmp_path: Path) -> None:
+    for name in ["a-skill", "b-skill", "c-skill"]:
+        skill_dir = tmp_path / name
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\n---\n# {name}\n",
+            encoding="utf-8",
+        )
+
+    class BatchConfig:
+        batch_size = 2
+
+    class BatchSchemaExtractor:
+        use_batch = True
+        config = BatchConfig()
+
+        def __init__(self):
+            self.extract_calls = 0
+            self.batches = []
+
+        def extract(self, manifest):
+            self.extract_calls += 1
+            raise AssertionError("single extract should not be used")
+
+        def extract_many(self, manifests):
+            self.batches.append(
+                [manifest.folder.relative_path for manifest in manifests]
+            )
+            return [
+                ExtractedSkillSchema(
+                    description="Create a short summary.",
+                    inputs=[{"name": "Research Topic", "type": "text"}],
+                    outputs=[{"name": "Short Summary", "type": "markdown"}],
+                )
+                for _manifest in manifests
+            ]
+
+    schema_extractor = BatchSchemaExtractor()
+    result = RepresentationExtractor(schema_extractor).extract_all(tmp_path)
+
+    assert schema_extractor.extract_calls == 0
+    assert schema_extractor.batches == [["a-skill", "b-skill"], ["c-skill"]]
+    assert [representation.id for representation in result.representations] == [
+        "a-skill",
+        "b-skill",
+        "c-skill",
+    ]
+
+
 def _manifest(tmp_path: Path):
     skill_dir = tmp_path / "aris-arxiv"
     skill_dir.mkdir()

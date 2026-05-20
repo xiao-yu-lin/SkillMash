@@ -24,9 +24,7 @@ from skillmash.representation.base_vocab import (
 )
 from skillmash.representation.llm import (
     LLMConfig,
-    create_openai_client,
-    extract_message_content,
-    safe_model_dump,
+    create_llm_client,
 )
 from skillmash.representation.models import NormalizationConfig
 
@@ -289,7 +287,7 @@ class OpenAICompatibleIONameResolver:
         progress: Optional[Callable[[str, IONameCandidate, Optional[IONameResolution]], None]] = None,
     ) -> None:
         self.config = config
-        self.client = create_openai_client(config)
+        self.client = create_llm_client(config)
         self.progress = progress
         self._cache: Dict[str, IONameResolution] = {}
         self._cache_lock = RLock()
@@ -321,33 +319,11 @@ class OpenAICompatibleIONameResolver:
             ],
         }
         self._emit_progress("start", candidate, None)
-        try:
-            response = self.client.chat.completions.create(
-                model=self.config.model,
-                temperature=self.config.temperature,
-                response_format={"type": "json_object"},
-                messages=[
-                    {
-                        "role": "system",
-                        "content": _IO_NAME_RESOLVER_PROMPT,
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(context, ensure_ascii=False, indent=2),
-                    },
-                ],
-            )
-        except Exception as exc:
-            raise RuntimeError(f"IO name vocabulary LLM request failed: {exc}") from exc
-
-        choice = response.choices[0]
-        content = extract_message_content(choice.message)
-        if not content:
-            raise RuntimeError(
-                "IO name vocabulary LLM response content is empty. "
-                f"finish_reason={getattr(choice, 'finish_reason', None)!r}; "
-                f"message={safe_model_dump(choice.message)}"
-            )
+        content = self.client.complete_json(
+            system_prompt=_IO_NAME_RESOLVER_PROMPT,
+            user_content=json.dumps(context, ensure_ascii=False, indent=2),
+            error_context="IO name vocabulary LLM",
+        )
         try:
             payload = json.loads(content)
         except json.JSONDecodeError as exc:
@@ -403,34 +379,12 @@ class OpenAICompatibleIONameResolver:
         }
         for candidate in unique_candidates:
             self._emit_progress("start", candidate, None)
-        try:
-            response = self.client.chat.completions.create(
-                model=self.config.model,
-                temperature=self.config.temperature,
-                response_format={"type": "json_object"},
-                timeout=200,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": _IO_NAME_BATCH_RESOLVER_PROMPT,
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(context, ensure_ascii=False, indent=2),
-                    },
-                ],
-            )
-        except Exception as exc:
-            raise RuntimeError(f"IO name vocabulary batch LLM request failed: {exc}") from exc
-
-        choice = response.choices[0]
-        content = extract_message_content(choice.message)
-        if not content:
-            raise RuntimeError(
-                "IO name vocabulary batch LLM response content is empty. "
-                f"finish_reason={getattr(choice, 'finish_reason', None)!r}; "
-                f"message={safe_model_dump(choice.message)}"
-            )
+        content = self.client.complete_json(
+            system_prompt=_IO_NAME_BATCH_RESOLVER_PROMPT,
+            user_content=json.dumps(context, ensure_ascii=False, indent=2),
+            timeout=200,
+            error_context="IO name vocabulary batch LLM",
+        )
         try:
             payload = json.loads(content)
         except json.JSONDecodeError as exc:

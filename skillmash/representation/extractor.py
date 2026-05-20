@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from skillmash.representation.llm import (
     LLMConfig,
-    create_openai_client,
-    extract_message_content,
-    safe_model_dump,
+    create_llm_client,
 )
 from skillmash.representation.models import (
     ArtifactSpec,
@@ -24,40 +22,19 @@ class OpenAICompatibleSchemaExtractor:
 
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
-        self.client = create_openai_client(config)
+        self.client = create_llm_client(config)
+        self.use_batch = config.backend == "vllm"
 
     def extract(self, manifest: RawSkillManifest) -> ExtractedSkillSchema:
-        try:
-            response = self.client.chat.completions.create(
-                model=self.config.model,
-                temperature=self.config.temperature,
-                response_format={"type": "json_object"},
-                messages=[
-                    {
-                        "role": "system",
-                        "content": _SYSTEM_PROMPT,
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(
-                            _build_llm_context(manifest),
-                            ensure_ascii=False,
-                            indent=2,
-                        ),
-                    },
-                ],
-            )
-        except Exception as exc:
-            raise RuntimeError(f"LLM request failed: {exc}") from exc
-
-        choice = response.choices[0]
-        content = extract_message_content(choice.message)
-        if not content:
-            raise RuntimeError(
-                "LLM response content is empty. "
-                f"finish_reason={getattr(choice, 'finish_reason', None)!r}; "
-                f"message={safe_model_dump(choice.message)}"
-            )
+        content = self.client.complete_json(
+            system_prompt=_SYSTEM_PROMPT,
+            user_content=json.dumps(
+                _build_llm_context(manifest),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            error_context="LLM schema extraction",
+        )
         try:
             payload = json.loads(content)
         except json.JSONDecodeError as exc:
@@ -66,6 +43,36 @@ class OpenAICompatibleSchemaExtractor:
                 f"content_prefix={content[:1000]!r}"
             ) from exc
         return schema_from_llm_payload(payload)
+
+    def extract_many(
+        self,
+        manifests: List[RawSkillManifest],
+    ) -> List[ExtractedSkillSchema]:
+        contents = self.client.complete_json_many(
+            [
+                {
+                    "system_prompt": _SYSTEM_PROMPT,
+                    "user_content": json.dumps(
+                        _build_llm_context(manifest),
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                }
+                for manifest in manifests
+            ],
+            error_context="LLM schema extraction batch",
+        )
+        schemas: List[ExtractedSkillSchema] = []
+        for index, content in enumerate(contents, start=1):
+            try:
+                payload = json.loads(content)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    "LLM batch response item is not valid JSON. "
+                    f"item={index} content_prefix={content[:1000]!r}"
+                ) from exc
+            schemas.append(schema_from_llm_payload(payload))
+        return schemas
 
 def schema_from_llm_payload(payload: Dict[str, Any]) -> ExtractedSkillSchema:
     """Convert a raw LLM JSON payload into ExtractedSkillSchema."""

@@ -56,6 +56,10 @@ SKILLMASH_LLM_TEMPERATURE=0
 SKILLMASH_LLM_TIMEOUT_SECONDS=60
 ```
 
+### vLLM Offline Mode
+
+When `LLM_MODEL` points to an existing local model path, SkillMash uses vLLM in-process for offline inference. To avoid duplicate model loading and redundant GPU memory usage, SkillMash implements a singleton caching mechanism: all components (schema extractor, I/O name resolver, graph matcher) sharing the same model path reuse a single vLLM engine instance.
+
 ## Run Representation Extraction
 
 PowerShell:

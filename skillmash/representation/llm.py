@@ -104,9 +104,21 @@ def create_openai_client(config: LLMConfig):
     )
 
 
+# Global cache for vLLM clients to prevent duplicate model loading.
+# When multiple components (extractor, resolver, matcher) share the same
+# model path, they should reuse a single vLLM engine instance.
+_VLLM_CLIENT_CACHE: Dict[str, "VLLMOfflineChatClient"] = {}
+_VLLM_CLIENT_LOCK = Lock()
+
+
 def create_llm_client(config: LLMConfig) -> ChatLLMClient:
     if config.backend == "vllm":
-        return VLLMOfflineChatClient(config)
+        # Use model path as cache key to ensure singleton per model
+        cache_key = config.model
+        with _VLLM_CLIENT_LOCK:
+            if cache_key not in _VLLM_CLIENT_CACHE:
+                _VLLM_CLIENT_CACHE[cache_key] = VLLMOfflineChatClient(config)
+            return _VLLM_CLIENT_CACHE[cache_key]
     return OpenAICompatibleChatClient(config)
 
 

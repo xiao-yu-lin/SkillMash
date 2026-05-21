@@ -119,7 +119,13 @@ def test_normalizer_normalizes_input_and_output_names_and_types(tmp_path: Path) 
         confidence=0.86,
     )
 
-    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+    config = NormalizationConfig(
+        io_name_aliases={
+            "query_or_arxiv_id": "query",
+            "downloaded_pdf": "paper",
+        }
+    )
+    result = SkillRepresentationNormalizer(config).normalize(manifest, extracted)
     representation = result.representation
 
     assert representation.id == "aris-arxiv"
@@ -154,7 +160,13 @@ def test_normalizer_uses_shared_io_name_vocab_aliases(tmp_path: Path) -> None:
         outputs=[{"name": "Short Summary", "type": "summary"}],
     )
 
-    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+    config = NormalizationConfig(
+        io_name_aliases={
+            "research_topic": "topic",
+            "short_summary": "summary",
+        }
+    )
+    result = SkillRepresentationNormalizer(config).normalize(manifest, extracted)
 
     assert result.representation.inputs[0].name == "topic"
     assert result.representation.outputs[0].name == "summary"
@@ -191,6 +203,7 @@ def test_normalization_config_exposes_io_name_vocab_size_limit() -> None:
     config = NormalizationConfig()
 
     assert config.max_vocab_size == 8
+    assert config.io_name_aliases == {}
     assert not hasattr(config, "max_canonical_names")
 
 
@@ -359,7 +372,8 @@ def test_normalizer_merges_duplicate_inputs_after_name_normalization(tmp_path: P
         outputs=[{"name": "Short Summary", "type": "text"}],
     )
 
-    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+    config = NormalizationConfig(io_name_aliases={"search_query": "query"})
+    result = SkillRepresentationNormalizer(config).normalize(manifest, extracted)
     inputs = result.representation.inputs
 
     assert len(inputs) == 1
@@ -396,7 +410,14 @@ def test_normalizer_merges_duplicate_outputs_after_name_normalization(tmp_path: 
         ],
     )
 
-    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+    config = NormalizationConfig(
+        io_name_aliases={
+            "research_topic": "topic",
+            "short_summary": "summary",
+            "final_answer": "summary",
+        }
+    )
+    result = SkillRepresentationNormalizer(config).normalize(manifest, extracted)
     outputs = result.representation.outputs
 
     assert len(outputs) == 1
@@ -481,12 +502,12 @@ def test_representation_extractor_accepts_pluggable_schema_extractor(tmp_path: P
     representation = result.representations[0]
     assert representation.id == "demo-skill"
     assert representation.tasks == ["summarize"]
-    assert representation.inputs[0].name == "topic"
-    assert representation.outputs[0].name == "summary"
+    assert representation.inputs[0].name == "research_topic"
+    assert representation.outputs[0].name == "short_summary"
     assert result.diagnostics == []
     assert result.io_name_vocab["version"] == "io-name-vocab-v1"
     assert result.task_vocab["version"] == "task-vocab-v1"
-    assert any(term["name"] == "topic" for term in result.io_name_vocab["terms"])
+    assert any(term["name"] == "research_topic" for term in result.io_name_vocab["terms"])
     assert any(term["name"] == "summarize" for term in result.task_vocab["terms"])
 
 

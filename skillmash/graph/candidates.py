@@ -11,6 +11,27 @@ from skillmash.representation.models import ArtifactSpec, ParameterSpec, SkillRe
 
 
 PRIORITY_RANK = {"high": 3, "medium": 2, "low": 1}
+DEFAULT_GENERIC_IO_NAMES = frozenset(
+    {
+        "dependencies",
+        "existing_apis",
+        "review_report",
+        "use_case_description",
+    }
+)
+DEFAULT_STOP_TERMS = frozenset(
+    {
+        "and",
+        "are",
+        "for",
+        "from",
+        "into",
+        "the",
+        "this",
+        "that",
+        "with",
+    }
+)
 
 
 class CandidateGenerator:
@@ -20,8 +41,14 @@ class CandidateGenerator:
         self,
         *,
         max_candidates_per_skill_relation: int = 12,
+        generic_io_names: Iterable[str] = DEFAULT_GENERIC_IO_NAMES,
+        max_exact_io_pair_fanout: int = 64,
+        max_text_term_bucket_size: int = 12,
     ) -> None:
         self.max_candidates_per_skill_relation = max_candidates_per_skill_relation
+        self.generic_io_names = {name.lower() for name in generic_io_names}
+        self.max_exact_io_pair_fanout = max(1, max_exact_io_pair_fanout)
+        self.max_text_term_bucket_size = max(2, max_text_term_bucket_size)
 
     def generate(self, registry: SkillRegistry) -> List[RelationCandidate]:
         skills = registry.ordered_skills()
@@ -51,6 +78,13 @@ class CandidateGenerator:
         candidates: MutableMapping[Tuple[str, str], RelationCandidate],
     ) -> None:
         for name in sorted(set(indexes.by_output_name) & set(indexes.by_input_name)):
+            if name.lower() in self.generic_io_names:
+                continue
+            pair_fanout = (
+                len(indexes.by_output_name[name]) * len(indexes.by_input_name[name])
+            )
+            if pair_fanout > self.max_exact_io_pair_fanout:
+                continue
             for source_id in sorted(indexes.by_output_name[name]):
                 for target_id in sorted(indexes.by_input_name[name]):
                     if source_id == target_id:
@@ -186,6 +220,8 @@ class CandidateGenerator:
         for term, skill_ids in sorted(indexes.by_text_term.items()):
             ids = sorted(skill_ids)
             if len(ids) < 2 or len(term) < 4:
+                continue
+            if len(ids) > self.max_text_term_bucket_size:
                 continue
             for source_id in ids:
                 for target_id in ids:
@@ -373,5 +409,5 @@ def _tokenize(text: str) -> Set[str]:
     return {
         token
         for token in re.split(r"[^a-z0-9]+", str(text).lower())
-        if len(token) >= 3
+        if len(token) >= 3 and token not in DEFAULT_STOP_TERMS
     }

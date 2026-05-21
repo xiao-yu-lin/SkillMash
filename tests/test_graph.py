@@ -6,6 +6,7 @@ from skillmash.graph import (
     CandidateGenerator,
     GraphBuilder,
     LLMMatch,
+    SkillIndexBuilder,
     SkillRegistryBuilder,
     validate_llm_matches,
     write_graph_build_result,
@@ -70,6 +71,86 @@ def test_candidate_generator_finds_exact_io_can_feed_candidate() -> None:
     assert exact[0].priority == "high"
     evidence = exact[0].evidence["directions"]["web_search->summarize_text"]
     assert "search_results" in evidence["matched_terms"]
+
+
+def test_candidate_generator_ignores_generic_exact_io_names() -> None:
+    registry = SkillRegistryBuilder().register(
+        [
+            SkillRepresentation(
+                id="report_writer",
+                name="Report Writer",
+                description="Write a review report.",
+                version="1.0.0",
+                tasks=["review"],
+                inputs=[ParameterSpec(name="topic", type="text")],
+                outputs=[ArtifactSpec(name="review_report", type="markdown")],
+                preconditions=[],
+                postconditions=[],
+            ),
+            SkillRepresentation(
+                id="report_reviewer",
+                name="Report Reviewer",
+                description="Review a prior report.",
+                version="1.0.0",
+                tasks=["review"],
+                inputs=[ParameterSpec(name="review_report", type="markdown")],
+                outputs=[ArtifactSpec(name="score", type="json")],
+                preconditions=[],
+                postconditions=[],
+            ),
+        ]
+    )
+
+    candidates = CandidateGenerator().generate(registry)
+
+    assert not [
+        candidate
+        for candidate in candidates
+        if "exact_io_match" in candidate.candidate_methods
+    ]
+
+
+def test_candidate_generator_ignores_high_fanout_text_terms() -> None:
+    registry = SkillRegistryBuilder().register(
+        [
+            SkillRepresentation(
+                id=f"shared_{index}",
+                name=f"Shared {index}",
+                description="Commonterm capability.",
+                version="1.0.0",
+                tasks=[f"task_{index}"],
+                inputs=[ParameterSpec(name=f"input_{index}", type="text")],
+                outputs=[ArtifactSpec(name=f"output_{index}", type="json")],
+                preconditions=[],
+                postconditions=[],
+            )
+            for index in range(3)
+        ]
+    )
+
+    candidates = CandidateGenerator(max_text_term_bucket_size=2).generate(registry)
+
+    assert not [
+        candidate
+        for candidate in candidates
+        if "text_term_match" in candidate.candidate_methods
+    ]
+
+
+def test_index_builder_omits_generic_io_names_and_stop_terms() -> None:
+    registry = SkillRegistryBuilder().register(
+        [_web_search_skill(), _summarize_skill(), _generic_report_skill()]
+    )
+    graph = GraphBuilder(matcher=AcceptingMatcher()).build(
+        [_web_search_skill(), _summarize_skill(), _generic_report_skill()]
+    ).graph
+
+    index = SkillIndexBuilder().build(registry, graph)
+
+    assert "search_results" in index.by_output
+    assert "review_report" not in index.by_output
+    assert "review_report" not in index.by_input
+    assert "and" not in index.by_text_term
 
 
 def test_validate_llm_matches_accepts_candidate_backed_match() -> None:
@@ -163,6 +244,20 @@ def _summarize_skill() -> SkillRepresentation:
         tasks=["summarize"],
         inputs=[ParameterSpec(name="search_results", type="json")],
         outputs=[ArtifactSpec(name="summary", type="markdown")],
+        preconditions=[],
+        postconditions=[],
+    )
+
+
+def _generic_report_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="generic_report",
+        name="Generic Report",
+        description="Read and write a generic review report.",
+        version="1.0.0",
+        tasks=["review"],
+        inputs=[ParameterSpec(name="review_report", type="markdown")],
+        outputs=[ArtifactSpec(name="review_report", type="markdown")],
         preconditions=[],
         postconditions=[],
     )

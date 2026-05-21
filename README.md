@@ -189,15 +189,15 @@ Progress is shown with Rich.
 Examples of normalization:
 
 ```text
-Query or Arxiv ID        -> query
-Downloaded PDF          -> paper
+Query or Arxiv ID        -> query_or_arxiv_id by local heuristic, or query if the LLM resolver chooses that term
+Downloaded PDF          -> downloaded_pdf by local heuristic, or paper if the LLM resolver chooses that term
 natural language query  -> text
 pdf                     -> pdf
 ```
 
 Normalization decisions are written separately to `normalization_decisions.json` so graph-facing representations stay compact and stable. The final dynamic input/output name vocabulary is written to `io_name_vocab.json`, and the final dynamic task vocabulary is written to `task_vocab.json`.
 
-When a new I/O name is not already in `io_name_vocab`, the resolver chooses one of:
+The built-in `io_name_vocab` starts without seed aliases by default. When a new I/O name is not already in `io_name_vocab`, the resolver chooses one of:
 
 ```text
 alias_existing        add the new spelling as an alias of an existing term

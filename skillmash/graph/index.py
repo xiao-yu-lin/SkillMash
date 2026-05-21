@@ -9,8 +9,42 @@ from typing import Dict, Iterable, List, Set
 from skillmash.graph.models import SkillGraph, SkillIndex, SkillRegistry
 
 
+DEFAULT_GENERIC_IO_NAMES = frozenset(
+    {
+        "dependencies",
+        "existing_apis",
+        "review_report",
+        "use_case_description",
+    }
+)
+DEFAULT_STOP_TERMS = frozenset(
+    {
+        "and",
+        "are",
+        "for",
+        "from",
+        "into",
+        "the",
+        "this",
+        "that",
+        "with",
+    }
+)
+
+
 class SkillIndexBuilder:
     """Build deterministic inverted and adjacency indexes."""
+
+    def __init__(
+        self,
+        *,
+        generic_io_names: Iterable[str] = DEFAULT_GENERIC_IO_NAMES,
+        max_io_bucket_size: int = 16,
+        max_text_bucket_size: int = 24,
+    ) -> None:
+        self.generic_io_names = {name.lower() for name in generic_io_names}
+        self.max_io_bucket_size = max(1, max_io_bucket_size)
+        self.max_text_bucket_size = max(2, max_text_bucket_size)
 
     def build(self, registry: SkillRegistry, graph: SkillGraph) -> SkillIndex:
         by_output: Dict[str, Set[str]] = defaultdict(set)
@@ -21,10 +55,12 @@ class SkillIndexBuilder:
 
         for skill in registry.ordered_skills():
             for output in skill.outputs:
-                by_output[output.name].add(skill.id)
+                if output.name.lower() not in self.generic_io_names:
+                    by_output[output.name].add(skill.id)
                 by_data_type[output.type].add(skill.id)
             for parameter in skill.inputs:
-                by_input[parameter.name].add(skill.id)
+                if parameter.name.lower() not in self.generic_io_names:
+                    by_input[parameter.name].add(skill.id)
                 by_data_type[parameter.type].add(skill.id)
             for task in skill.tasks:
                 by_task[task].add(skill.id)
@@ -44,31 +80,62 @@ class SkillIndexBuilder:
         }
 
         for edge in graph.edges:
-            if not edge.source.startswith("skill:") or not edge.target.startswith("skill:"):
+            if not edge.source.startswith("skill:") or not edge.target.startswith(
+                "skill:"
+            ):
                 continue
             source_id = edge.source.removeprefix("skill:")
             target_id = edge.target.removeprefix("skill:")
             neighbors[source_id].add(target_id)
             if edge.type == "can_feed":
-                shared = sorted(skill_outputs.get(source_id, set()) & skill_inputs.get(target_id, set()))
+                shared = sorted(
+                    skill_outputs.get(source_id, set())
+                    & skill_inputs.get(target_id, set())
+                )
                 for name in shared:
+                    if name.lower() in self.generic_io_names:
+                        continue
                     upstream_by_input[name].add(source_id)
                     downstream_by_output[name].add(target_id)
 
         return SkillIndex(
-            by_output=_freeze_index(by_output),
-            by_input=_freeze_index(by_input),
+            by_output=_freeze_index(
+                by_output,
+                max_bucket_size=self.max_io_bucket_size,
+            ),
+            by_input=_freeze_index(
+                by_input,
+                max_bucket_size=self.max_io_bucket_size,
+            ),
             by_task=_freeze_index(by_task),
             by_data_type=_freeze_index(by_data_type),
             neighbors=_freeze_index(neighbors),
-            upstream_by_input=_freeze_index(upstream_by_input),
-            downstream_by_output=_freeze_index(downstream_by_output),
-            by_text_term=_freeze_index(by_text_term),
+            upstream_by_input=_freeze_index(
+                upstream_by_input,
+                max_bucket_size=self.max_io_bucket_size,
+            ),
+            downstream_by_output=_freeze_index(
+                downstream_by_output,
+                max_bucket_size=self.max_io_bucket_size,
+            ),
+            by_text_term=_freeze_index(
+                by_text_term,
+                max_bucket_size=self.max_text_bucket_size,
+            ),
         )
 
 
-def _freeze_index(index: Dict[str, Set[str]]) -> Dict[str, List[str]]:
-    return {key: sorted(values) for key, values in sorted(index.items())}
+def _freeze_index(
+    index: Dict[str, Set[str]],
+    *,
+    max_bucket_size: int | None = None,
+) -> Dict[str, List[str]]:
+    frozen = {}
+    for key, values in sorted(index.items()):
+        if max_bucket_size is not None and len(values) > max_bucket_size:
+            continue
+        frozen[key] = sorted(values)
+    return frozen
 
 
 def _skill_terms(skill) -> Set[str]:
@@ -88,5 +155,5 @@ def _tokenize(text: str) -> Set[str]:
     return {
         token
         for token in re.split(r"[^a-z0-9]+", str(text).lower())
-        if len(token) >= 3
+        if len(token) >= 3 and token not in DEFAULT_STOP_TERMS
     }

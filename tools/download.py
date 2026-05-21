@@ -310,7 +310,7 @@ def main():
             "total": len(skills),
             "skills": skills
         }
-        index_path.write_text(json.dumps(index_data, ensure_ascii=False, indent=2))
+        index_path.write_text(json.dumps(index_data, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"索引已保存到: {index_path}")
         return
     
@@ -357,7 +357,7 @@ def main():
         "stats": stats,
         "skills": results
     }
-    index_path.write_text(json.dumps(index_data, ensure_ascii=False, indent=2))
+    index_path.write_text(json.dumps(index_data, ensure_ascii=False, indent=2), encoding="utf-8")
     
     # 打印统计
     print(f"\n{'='*50}")

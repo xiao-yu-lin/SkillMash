@@ -368,6 +368,7 @@ DataType =
   markdown
   json
   csv
+  yaml
   pdf
   html
   docx
@@ -381,6 +382,7 @@ DataType =
   path
   audio
   video
+  code
   unknown
 ```
 
@@ -571,11 +573,12 @@ DataType 归一化把 LLM 的自由文本类型收敛到受控词表。这里的
 | --- | --- |
 | `natural language`、`plain text`、`query` | `text` |
 | `markdown`、`md` | `markdown` |
+| `yaml`、`yml` | `yaml` |
 | `link`、`uri`、`webpage` | `url` |
 | `pdf`、`academic_paper`、`publication` | `pdf` |
 | `spreadsheet`、`csv`、`dataframe` | `csv` |
 | `slides`、`presentation`、`powerpoint` | `pptx` |
-| `source_code`、`script`、`program` | `text` |
+| `source_code`、`code_file`、`kernel_code`、`program` | `code` |
 | `chart`、`flowchart`、`mermaid` | `png/svg/text` |
 
 如果无法归一化：
@@ -694,7 +697,7 @@ class NormalizationConfig:
     schema_version: str = "skill-representation-v1"
     io_name_vocab_version: str = "io-name-vocab-v1"
     data_type_vocab_version: str = "data-type-v1"
-    max_vocab_size: int = 8
+    max_vocab_size: int | None = None
     default_kind: str = "wrapped"
     default_version: str = "1.0.0"
     default_input_name: str = "input"
@@ -714,22 +717,26 @@ DATA_TYPE_ALIASES = {
     "natural_language": "text",
     "plain_text": "text",
     "query": "text",
+    "yml": "yaml",
     "paper": "pdf",
     "academic_paper": "pdf",
     "spreadsheet": "csv",
     "dataframe": "csv",
     "slides": "pptx",
     "presentation": "pptx",
-    "source_code": "text",
+    "source_code": "code",
+    "code_file": "code",
+    "kernel_code": "code",
+    "program": "code",
 }
 ```
 
 动态 `io_name_vocab` 约束：
 
-1. `io_name_vocab` 词表容量有上限，例如 `max_vocab_size = 8`。
+1. `io_name_vocab` 默认不设固定容量上限，词表随 Skill 语料动态增长。
 2. alias 数量不设硬上限，只记录频次、首次出现、最近出现和置信度。
 3. 未命中新名称时，由注入的 `IONameResolver` 判断 `alias_existing`、`create_new`、`exclude_non_runtime` 或 `merge_existing`；示例脚本默认使用 LLM resolver，也可显式切换到本地 heuristic resolver。
-4. 达到词表容量上限后，禁止 `create_new`，必须合并到现有词项或排除非运行字段。
+4. `max_vocab_size` 仅作为可选兼容配置；只有显式设置时才启用硬上限。达到上限后才禁止 `create_new`，必须合并到现有词项或排除非运行字段。
 5. LLM 决策自动生效，但必须写入 `normalization_decisions.json`，方便复现和回滚。
 6. 离线构建完成后必须保存最终 `io_name_vocab.json`，供下一轮构建复用。
 
@@ -739,8 +746,8 @@ DATA_TYPE_ALIASES = {
 | --- | --- |
 | `alias_existing` | 新名称是已有词项的同义词，加入该词项 aliases。 |
 | `create_new` | 词表未满且新名称代表新的运行语义，新增词项。 |
-| `merge_existing` | 词表已满或语义足够接近，合并到已有词项。 |
-| `exclude_non_runtime` | 统计、日志、trace、telemetry、原始副本等非运行字段，不进入主表征。 |
+| `merge_existing` | 语义足够接近，或显式容量上限已满时合并到已有词项。 |
+| `exclude_non_runtime` | 明确只用于 telemetry、analytics、tracking、bookkeeping 或 original-copy 的附属字段，不进入主表征。日志、trace、metrics、stats 如果是 Skill 的分析输入，不应排除。 |
 
 ### 6.12 关键函数实现策略
 
@@ -831,6 +838,7 @@ default_input_created
 unknown_output_created
 low_extraction_confidence
 unsupported_type_normalized
+possible_duplicate_io_name
 ```
 
 ### 7.3 归一化决策日志
@@ -928,3 +936,33 @@ class RepresentationExtractionResult:
 6. 实现 `SkillRepresentationNormalizer`，补齐默认值、标签和类型归一化。
 7. 实现 diagnostics 聚合与 JSON 写出。
 8. 用 2 到 3 个样例 Skill 做 smoke test，再接入完整离线构建。
+
+## 12. 下一步计划：语义层级词表
+
+当前 `io_name_vocab` 使用扁平 canonical term，例如 `report`、`config`、`metrics`、`topology`。动态增长可以避免固定容量导致的错误合并，但扁平词表仍然有一个问题：图构建有时需要精细语义，有时又需要泛化语义。
+
+下一步可以把 I/O name 词表扩展成语义层级结构：
+
+```json
+{
+  "name": "kernel_code",
+  "parent": "code",
+  "ancestors": ["artifact"],
+  "allowed_types": ["text", "file"],
+  "aliases": ["source_code", "operator_code"]
+}
+```
+
+建议分三层表达：
+
+1. 精确层：`kernel_code`、`attack_chains`、`slow_query_log`、`review_comments`。
+2. 中间层：`code`、`findings`、`logs`、`repository`、`requirements`。
+3. 泛化层：`artifact`、`evidence`、`context`、`config`、`document`。
+
+图构建时可以按场景选择匹配粒度：
+
+1. 严格连接优先使用精确层，例如 `kernel_code -> code` 不能直接等同于 `metrics`。
+2. 召回扩展可以向父节点泛化，例如 `review_report -> report -> document`。
+3. 当精确 term 低频但父类稳定时，可以在图中保留精确 term，同时使用父类补召回。
+
+语义层级词表不应重新引入固定容量上限。它应该通过相似度、父类关系、使用频次和人工/LLM 审核诊断来控制质量，而不是通过强制合并控制大小。

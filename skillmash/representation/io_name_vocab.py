@@ -19,7 +19,8 @@ from skillmash.representation.base_vocab import (
     BaseResolver,
     BaseVocabTerm,
     HeuristicBaseResolver,
-    NON_RUNTIME_HINTS,
+    _max_vocab_size_from_data,
+    _normalize_max_vocab_size,
     term_similarity,
 )
 from skillmash.representation.llm import (
@@ -95,11 +96,11 @@ class IONameVocabulary:
         self,
         *,
         version: str,
-        max_vocab_size: int,
+        max_vocab_size: Optional[int],
         terms: Optional[List[IONameVocabTerm]] = None,
     ) -> None:
         self.version = version
-        self.max_vocab_size = max(1, max_vocab_size)
+        self.max_vocab_size = _normalize_max_vocab_size(max_vocab_size)
         self._terms: Dict[str, IONameVocabTerm] = {}
         self._aliases: Dict[str, str] = {}
         self._lock = RLock()
@@ -128,7 +129,10 @@ class IONameVocabulary:
     ) -> "IONameVocabulary":
         return cls(
             version=str(data.get("version") or config.io_name_vocab_version),
-            max_vocab_size=int(data.get("max_vocab_size") or config.max_vocab_size),
+            max_vocab_size=_max_vocab_size_from_data(
+                data.get("max_vocab_size"),
+                config.max_vocab_size,
+            ),
             terms=[
                 IONameVocabTerm.from_dict(item)
                 for item in data.get("terms", [])
@@ -170,7 +174,7 @@ class IONameVocabulary:
             return len(self._terms)
 
     def is_full(self) -> bool:
-        return self.size() >= self.max_vocab_size
+        return self.max_vocab_size is not None and self.size() >= self.max_vocab_size
 
     def term_names(self) -> List[str]:
         with self._lock:
@@ -206,7 +210,11 @@ class IONameVocabulary:
         example: str = "",
     ) -> str:
         with self._lock:
-            if name not in self._terms and len(self._terms) >= self.max_vocab_size:
+            if (
+                self.max_vocab_size is not None
+                and name not in self._terms
+                and len(self._terms) >= self.max_vocab_size
+            ):
                 return self.closest_term(name) or name
             term = self._terms.get(name)
             if term is None:
@@ -237,7 +245,7 @@ class IONameVocabulary:
             return {
                 "version": self.version,
                 "max_vocab_size": self.max_vocab_size,
-                "is_full": len(self._terms) >= self.max_vocab_size,
+                "is_full": self.is_full(),
                 "terms": [
                     self._terms[name].to_dict()
                     for name in sorted(self._terms)
@@ -312,7 +320,8 @@ class OpenAICompatibleIONameResolver:
                 "exclude_non_runtime",
             ],
             "rules": [
-                "If the candidate is only for logs, statistics, telemetry, tracing, or original-copy bookkeeping, use exclude_non_runtime.",
+                "If the candidate is clearly bookkeeping-only telemetry, analytics, tracking, or original-copy data, use exclude_non_runtime.",
+                "Do not exclude logs, traces, metrics, stats, or evidence when they are runtime inputs consumed by debugging, performance, security, or database analysis Skills.",
                 "If the candidate is synonymous with an existing term, use alias_existing and set target to that term.",
                 "If the vocabulary is not full and the candidate is a genuinely new runtime semantic role, use create_new.",
                 "If the vocabulary is full, do not use create_new; use merge_existing or exclude_non_runtime.",
@@ -370,7 +379,8 @@ class OpenAICompatibleIONameResolver:
             ],
             "rules": [
                 "Return exactly one resolution for every candidate token.",
-                "If a candidate is only for logs, statistics, telemetry, tracing, or original-copy bookkeeping, use exclude_non_runtime.",
+                "If a candidate is clearly bookkeeping-only telemetry, analytics, tracking, or original-copy data, use exclude_non_runtime.",
+                "Do not exclude logs, traces, metrics, stats, or evidence when they are runtime inputs consumed by debugging, performance, security, or database analysis Skills.",
                 "If a candidate is synonymous with an existing term, use alias_existing and set target to that term.",
                 "If the vocabulary is not full and a candidate is a genuinely new runtime semantic role, use create_new.",
                 "If the vocabulary is full, do not use create_new; use merge_existing or exclude_non_runtime.",

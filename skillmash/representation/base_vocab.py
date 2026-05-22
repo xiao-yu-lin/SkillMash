@@ -10,22 +10,25 @@ from threading import RLock
 from typing import Any, Dict, List, Optional, Protocol, Set, Union
 
 
-# Shared constant for non-runtime field detection.
+# Shared constants for conservative non-runtime field detection. Logs, traces,
+# stats, and metrics can be first-class runtime inputs for debugging,
+# performance, security, or database skills, so they are not excluded by name
+# alone.
 NON_RUNTIME_HINTS = frozenset({
     "analytics",
-    "log",
-    "logging",
-    "metric",
-    "metrics",
-    "origin",
-    "original",
-    "raw",
-    "stat",
-    "stats",
+    "bookkeeping",
     "telemetry",
-    "trace",
     "tracking",
 })
+
+NON_RUNTIME_PHRASES = (
+    "for logging only",
+    "for analytics only",
+    "for telemetry only",
+    "for bookkeeping",
+    "not required by execution",
+    "original copy",
+)
 
 
 def term_similarity(left: str, right: str) -> float:
@@ -128,11 +131,11 @@ class BaseVocabulary:
         self,
         *,
         version: str,
-        max_vocab_size: int,
+        max_vocab_size: Optional[int],
         terms: Optional[List[BaseVocabTerm]] = None,
     ) -> None:
         self.version = version
-        self.max_vocab_size = max(1, max_vocab_size)
+        self.max_vocab_size = _normalize_max_vocab_size(max_vocab_size)
         self._terms: Dict[str, BaseVocabTerm] = {}
         self._aliases: Dict[str, str] = {}
         self._lock = RLock()
@@ -144,7 +147,7 @@ class BaseVocabulary:
         cls,
         *,
         version: str,
-        max_vocab_size: int,
+        max_vocab_size: Optional[int],
         aliases: Dict[str, str],
     ) -> "BaseVocabulary":
         """Build vocabulary from an alias mapping."""
@@ -166,11 +169,14 @@ class BaseVocabulary:
         data: Dict[str, Any],
         *,
         default_version: str,
-        default_max_vocab_size: int,
+        default_max_vocab_size: Optional[int],
     ) -> "BaseVocabulary":
         return cls(
             version=str(data.get("version") or default_version),
-            max_vocab_size=int(data.get("max_vocab_size") or default_max_vocab_size),
+            max_vocab_size=_max_vocab_size_from_data(
+                data.get("max_vocab_size"),
+                default_max_vocab_size,
+            ),
             terms=[
                 BaseVocabTerm.from_dict(item)
                 for item in data.get("terms", [])
@@ -184,7 +190,7 @@ class BaseVocabulary:
         path: Union[Path, str],
         *,
         default_version: str,
-        default_max_vocab_size: int,
+        default_max_vocab_size: Optional[int],
     ) -> "BaseVocabulary":
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls.from_dict(
@@ -218,7 +224,7 @@ class BaseVocabulary:
             return len(self._terms)
 
     def is_full(self) -> bool:
-        return self.size() >= self.max_vocab_size
+        return self.max_vocab_size is not None and self.size() >= self.max_vocab_size
 
     def term_names(self) -> List[str]:
         with self._lock:
@@ -238,7 +244,11 @@ class BaseVocabulary:
 
     def create_term(self, name: str, *, alias: str = "", example: str = "") -> str:
         with self._lock:
-            if name not in self._terms and len(self._terms) >= self.max_vocab_size:
+            if (
+                self.max_vocab_size is not None
+                and name not in self._terms
+                and len(self._terms) >= self.max_vocab_size
+            ):
                 return self.closest_term(name) or name
             term = self._terms.get(name)
             if term is None:
@@ -264,7 +274,7 @@ class BaseVocabulary:
             return {
                 "version": self.version,
                 "max_vocab_size": self.max_vocab_size,
-                "is_full": len(self._terms) >= self.max_vocab_size,
+                "is_full": self.is_full(),
                 "terms": [
                     self._terms[name].to_dict()
                     for name in sorted(self._terms)
@@ -288,8 +298,17 @@ class HeuristicBaseResolver:
 
     def is_non_runtime(self, token: str, description: str) -> bool:
         """Check if the term is likely a non-runtime field."""
-        text = f"{token} {description}".lower()
-        return any(hint in text for hint in NON_RUNTIME_HINTS)
+        token_parts = {part for part in token.lower().split("_") if part}
+        if token_parts & NON_RUNTIME_HINTS:
+            return True
+        if {"raw", "copy"} <= token_parts or {"original", "copy"} <= token_parts:
+            return True
+        if {"internal", "log", "id"} <= token_parts:
+            return True
+        if {"debug", "trace", "id"} <= token_parts:
+            return True
+        text = description.lower()
+        return any(phrase in text for phrase in NON_RUNTIME_PHRASES)
 
     def resolve_base(
         self,
@@ -338,3 +357,18 @@ class HeuristicBaseResolver:
                 vocabulary=vocabulary,
             )
         return resolutions
+
+
+def _normalize_max_vocab_size(value: Optional[int]) -> Optional[int]:
+    if value is None:
+        return None
+    return max(1, int(value))
+
+
+def _max_vocab_size_from_data(
+    value: Any,
+    default: Optional[int],
+) -> Optional[int]:
+    if value is None:
+        return default
+    return _normalize_max_vocab_size(int(value))

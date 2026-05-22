@@ -350,7 +350,7 @@ LLM 输出 schema：
     "diagnostics": "diagnostics.json"
   },
   "thresholds": {
-    "can_feed": 0.0,
+    "can_feed": 0.7,
     "similar_to": 0.0,
     "substitute_for": 0.0
   }

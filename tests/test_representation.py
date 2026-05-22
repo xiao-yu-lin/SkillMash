@@ -199,10 +199,10 @@ def test_normalizer_normalizes_tasks_with_dynamic_vocab(tmp_path: Path) -> None:
     ]
 
 
-def test_normalization_config_exposes_io_name_vocab_size_limit() -> None:
+def test_normalization_config_uses_dynamic_io_name_vocab_by_default() -> None:
     config = NormalizationConfig()
 
-    assert config.max_vocab_size == 8
+    assert config.max_vocab_size is None
     assert config.io_name_aliases == {}
     assert not hasattr(config, "max_canonical_names")
 
@@ -239,6 +239,78 @@ def test_normalizer_adds_new_io_name_to_vocab_when_capacity_remains(tmp_path: Pa
     assert result.representation.inputs[0].name == "customer_intent"
     assert normalizer.io_name_vocabulary.lookup("customer_intent") == "customer_intent"
     assert result.decisions[0].method == "create_new"
+
+
+def test_normalizer_keeps_creating_io_names_without_default_capacity_limit(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(tmp_path)
+    config = NormalizationConfig(
+        io_name_aliases={
+            "api_spec": "api_spec",
+            "auth_mechanism": "auth_mechanism",
+            "config": "config",
+            "context": "context",
+            "metrics": "metrics",
+            "report": "report",
+            "sample_requests": "sample_requests",
+            "topology": "topology",
+        }
+    )
+    extracted = ExtractedSkillSchema(
+        description="Produce security findings.",
+        inputs=[{"name": "Runtime Logs", "type": "text"}],
+        outputs=[{"name": "Findings", "type": "json"}],
+    )
+
+    result = SkillRepresentationNormalizer(config).normalize(manifest, extracted)
+
+    assert [item.name for item in result.representation.inputs] == ["runtime_logs"]
+    assert [item.name for item in result.representation.outputs] == ["findings"]
+    assert {decision.method for decision in result.decisions if decision.field == "name"} == {
+        "create_new"
+    }
+
+
+def test_normalizer_supports_yaml_and_code_data_types(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    extracted = ExtractedSkillSchema(
+        description="Generate implementation artifacts.",
+        inputs=[{"name": "Dependencies", "type": "yaml"}],
+        outputs=[{"name": "Kernel Code", "type": "code"}],
+    )
+
+    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+
+    assert result.representation.inputs[0].type == "yaml"
+    assert result.representation.outputs[0].type == "code"
+    assert not any(
+        diagnostic.code == "unsupported_type_normalized"
+        for diagnostic in result.diagnostics
+    )
+
+
+def test_normalizer_warns_about_possible_duplicate_io_names(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    config = NormalizationConfig(
+        io_name_aliases={"app_description": "app_description"},
+        possible_duplicate_name_similarity_threshold=0.86,
+    )
+    extracted = ExtractedSkillSchema(
+        description="Review a pull request.",
+        inputs=[{"name": "PR Description", "type": "text"}],
+        outputs=[{"name": "Review Report", "type": "markdown"}],
+    )
+
+    result = SkillRepresentationNormalizer(config).normalize(manifest, extracted)
+
+    assert result.representation.inputs[0].name == "pr_description"
+    assert any(
+        diagnostic.code == "possible_duplicate_io_name"
+        and diagnostic.details["token"] == "pr_description"
+        and diagnostic.details["closest_term"] == "app_description"
+        for diagnostic in result.diagnostics
+    )
 
 
 def test_normalizer_batches_unseen_io_names_per_skill(tmp_path: Path) -> None:
@@ -332,9 +404,9 @@ def test_normalizer_excludes_non_runtime_io_names(tmp_path: Path) -> None:
         inputs=[
             {"name": "Query", "type": "text"},
             {
-                "name": "Origin Query",
+                "name": "Original Copy",
                 "type": "text",
-                "description": "用户原始查询内容，用于统计",
+                "description": "Original copy kept for bookkeeping only.",
             },
         ],
         outputs=[{"name": "Search Query", "type": "text"}],
@@ -345,7 +417,7 @@ def test_normalizer_excludes_non_runtime_io_names(tmp_path: Path) -> None:
     assert [item.name for item in result.representation.inputs] == ["query"]
     assert any(
         decision.method == "exclude_non_runtime"
-        and decision.token == "origin_query"
+        and decision.token == "original_copy"
         for decision in result.decisions
     )
 

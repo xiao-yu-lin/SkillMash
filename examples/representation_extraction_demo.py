@@ -46,7 +46,7 @@ from skillmash.representation import (  # noqa: E402
 
 
 class ConsoleProgress:
-    """Small stderr progress bar without external dependencies."""
+    """Small stderr progress display without external dependencies."""
 
     def __init__(self, logger: logging.Logger, width: int = 28) -> None:
         self.logger = logger
@@ -55,25 +55,39 @@ class ConsoleProgress:
 
     def __call__(self, stage: str, current: int, total: int, item: str) -> None:
         self.logger.info("stage=%s current=%s total=%s item=%s", stage, current, total, item)
-        if stage != "done":
-            return
 
         ratio = current / total if total else 1
         filled = int(self.width * ratio)
         bar = "#" * filled + "." * (self.width - filled)
-        line = f"[{bar}] {current}/{total} {item}"
+        label = self._stage_label(stage)
+        line = f"[{bar}] {current}/{total} {label:<13} {item}"
+        self._write_line(line)
+        if stage == "done" and current == total:
+            print(file=sys.stderr, flush=True)
+
+    def _write_line(self, line: str) -> None:
         padding = " " * max(0, self.last_line_length - len(line))
         print(f"\r{line}{padding}", end="", file=sys.stderr, flush=True)
         self.last_line_length = len(line)
-        if current == total:
-            print(file=sys.stderr, flush=True)
+
+    def _stage_label(self, stage: str) -> str:
+        labels = {
+            "scan": "scan",
+            "parse": "parse",
+            "extract": "llm_extract",
+            "extract_batch": "llm_batch",
+            "normalize": "normalize",
+            "done": "done",
+        }
+        return labels.get(stage, stage)
 
 
 class VocabularyProgress:
-    """Log each LLM-backed io_name_vocab decision so normalize is not silent."""
+    """Report each LLM-backed io_name_vocab decision so normalize is not silent."""
 
     def __init__(self, logger: logging.Logger) -> None:
         self.logger = logger
+        self.last_line_length = 0
 
     def __call__(
         self,
@@ -89,6 +103,12 @@ class VocabularyProgress:
                 candidate.token,
                 candidate.data_type,
             )
+            self._write_line(
+                (
+                    "[vocab] resolving   "
+                    f"{candidate.skill_id} {candidate.direction}:{candidate.token}"
+                )
+            )
             return
         self.logger.info(
             (
@@ -103,6 +123,19 @@ class VocabularyProgress:
             resolution.confidence,
             resolution.forced_merge,
         )
+        self._write_line(
+            (
+                "[vocab] resolved    "
+                f"{candidate.skill_id} {candidate.direction}:{candidate.token} "
+                f"-> {resolution.normalized_value or 'excluded'} "
+                f"({resolution.action})"
+            )
+        )
+
+    def _write_line(self, line: str) -> None:
+        padding = " " * max(0, self.last_line_length - len(line))
+        print(f"\r{line}{padding}", end="", file=sys.stderr, flush=True)
+        self.last_line_length = len(line)
 
 
 def main() -> None:

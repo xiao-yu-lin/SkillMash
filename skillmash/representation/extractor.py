@@ -143,7 +143,7 @@ Prefer one to three short verb terms.
 
 Prefer these type values:
 text, markdown, json, csv, pdf, html, docx, pptx, xlsx, png, jpg, svg,
-audio, video, file, path, url, unknown.
+audio, video, file, path, url, yaml, code, unknown.
 
 For example, a PDF paper should use name=paper and type=pdf. A markdown
 summary should use name=summary and type=markdown.

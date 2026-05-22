@@ -177,12 +177,18 @@ class NormalizationConfig:
     # Controlled DataType vocabulary version.
     data_type_vocab_version: str = "data-type-v1"
 
-    # Maximum number of canonical I/O name terms.
-    max_vocab_size: int = 8
+    # Optional soft cap for canonical I/O name terms. None means the
+    # vocabulary can grow with the observed Skill corpus instead of forcing
+    # unrelated runtime semantics into broad buckets.
+    max_vocab_size: Optional[int] = None
 
-    # task_vocab has its own capacity so graph-facing capability terms can grow
-    # independently from I/O role names.
-    max_task_vocab_size: int = 32
+    # task_vocab has its own optional capacity so graph-facing capability terms
+    # can grow independently from I/O role names.
+    max_task_vocab_size: Optional[int] = None
+
+    # Warn when a newly-created I/O name is very close to an existing term.
+    # This is review guidance only; it does not force a merge.
+    possible_duplicate_name_similarity_threshold: float = 0.86
 
     # Default Skill version when frontmatter does not declare one.
     default_version: str = "1.0.0"
@@ -206,6 +212,7 @@ class NormalizationConfig:
             "markdown",
             "json",
             "csv",
+            "yaml",
             "pdf",
             "html",
             "docx",
@@ -219,6 +226,7 @@ class NormalizationConfig:
             "path",
             "audio",
             "video",
+            "code",
             "unknown",
         }
     )
@@ -238,15 +246,22 @@ class NormalizationConfig:
             "spreadsheet": "csv",
             "dataframe": "csv",
             "md": "markdown",
+            "yml": "yaml",
             "json_object": "json",
             "slides": "pptx",
             "presentation": "pptx",
             "powerpoint": "pptx",
             "ppt": "pptx",
             "jpeg": "jpg",
-            "source_code": "text",
-            "script": "text",
-            "program": "text",
+            "source_code": "code",
+            "code_file": "code",
+            "kernel_code": "code",
+            "operator_code": "code",
+            "cpp_code": "code",
+            "python_code": "code",
+            "javascript_code": "code",
+            "program": "code",
+            "shell_script": "code",
             "chart": "png",
             "flowchart": "svg",
             "mermaid": "text",

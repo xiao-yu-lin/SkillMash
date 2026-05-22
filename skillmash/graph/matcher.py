@@ -22,7 +22,7 @@ from skillmash.representation.models import SkillRepresentation
 
 
 DEFAULT_THRESHOLDS = {
-    "can_feed": 0.0,
+    "can_feed": 0.7,
     "similar_to": 0.0,
     "substitute_for": 0.0,
 }
@@ -432,10 +432,19 @@ def _field_names(values: Any) -> List[str]:
     names = []
     for value in values:
         if isinstance(value, str):
-            names.append(value)
+            names.append(_field_name_from_string(value))
         elif isinstance(value, dict) and value.get("name"):
             names.append(str(value["name"]))
-    return names
+    return [name for name in names if name]
+
+
+def _field_name_from_string(value: str) -> str:
+    text = str(value).strip()
+    if not text:
+        return ""
+    head = text.split(":", 1)[0].strip()
+    head = head.split("(", 1)[0].strip()
+    return head
 
 
 def _directional_evidence(

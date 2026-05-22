@@ -207,7 +207,7 @@ class BuildManifest:
     )
     thresholds: Dict[str, float] = field(
         default_factory=lambda: {
-            "can_feed": 0.0,
+            "can_feed": 0.7,
             "similar_to": 0.0,
             "substitute_for": 0.0,
         }

@@ -7,6 +7,8 @@
   <style>
     :root {
       color-scheme: dark;
+      --left-width: 320px;
+      --right-width: 460px;
       --bg: #101114;
       --panel: #181a20;
       --panel-2: #20232b;
@@ -34,7 +36,7 @@
 
     .app {
       display: grid;
-      grid-template-columns: 320px minmax(0, 1fr) 360px;
+      grid-template-columns: var(--left-width) 6px minmax(0, 1fr) 6px var(--right-width);
       height: 100vh;
     }
 
@@ -46,8 +48,24 @@
     }
 
     .details {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
       border-right: 0;
       border-left: 1px solid var(--line);
+      overflow: hidden;
+    }
+
+    .resizer {
+      position: relative;
+      z-index: 5;
+      background: var(--line);
+      cursor: col-resize;
+    }
+
+    .resizer:hover,
+    .resizer.dragging {
+      background: var(--skill);
     }
 
     main {
@@ -153,11 +171,28 @@
     }
 
     input[type="search"],
+    textarea,
     select {
       width: 100%;
-      height: 36px;
       padding: 0 10px;
       outline: 0;
+    }
+
+    input[type="search"],
+    select {
+      height: 36px;
+    }
+
+    textarea {
+      min-height: 104px;
+      padding: 10px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #11141a;
+      color: var(--text);
+      font: inherit;
+      line-height: 1.45;
     }
 
     input[type="range"] {
@@ -251,6 +286,21 @@
       overflow: auto;
     }
 
+    .orchestration-results-section {
+      display: flex;
+      flex: 1 1 auto;
+      min-height: 0;
+      flex-direction: column;
+    }
+
+    #orchestrationResults {
+      flex: 1 1 auto;
+      max-height: none;
+      min-height: 0;
+      align-content: start;
+      padding-right: 2px;
+    }
+
     .item {
       padding: 8px 10px;
       border: 1px solid var(--line);
@@ -338,12 +388,163 @@
       line-height: 1.45;
     }
 
+    .primary {
+      border-color: rgba(77, 182, 172, .55);
+      background: #16302f;
+      color: #dffaf6;
+    }
+
+    .primary:disabled {
+      cursor: wait;
+      opacity: .65;
+    }
+
+    .plan-card {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #141820;
+    }
+
+    .loading-spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,.2);
+      border-radius: 50%;
+      border-top-color: var(--skill);
+      animation: spin 0.8s linear infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .status-loading {
+      color: var(--skill);
+    }
+
+    .status-error {
+      color: var(--danger);
+    }
+
+    .plan-card.loading {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+
+    .plan-card h3 {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .plan-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .flow-frame {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0f1116;
+      padding: 10px;
+    }
+
+    .flow-svg {
+      display: block;
+      min-width: 100%;
+      height: auto;
+    }
+
+    .flow-edge {
+      fill: none;
+      stroke: #9aa6b9;
+      stroke-width: 2;
+    }
+
+    .flow-edge-label rect {
+      fill: #10141b;
+      stroke: rgba(154, 166, 185, .38);
+      rx: 5;
+    }
+
+    .flow-edge-label text {
+      fill: var(--muted);
+      font-size: 10px;
+      dominant-baseline: middle;
+      text-anchor: middle;
+    }
+
+    .flow-node rect {
+      fill: #17282c;
+      stroke: #4db6ac;
+      stroke-width: 1.4;
+      rx: 6;
+    }
+
+    .flow-node text {
+      fill: var(--text);
+      font-size: 12px;
+      dominant-baseline: middle;
+      text-anchor: middle;
+    }
+
+    .flow-column-label {
+      fill: var(--muted);
+      font-size: 11px;
+      text-anchor: middle;
+    }
+
+    .flow-empty-edge-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+      margin-top: 8px;
+    }
+
+    .dag {
+      display: none;
+      gap: 8px;
+      overflow-x: auto;
+    }
+
+    .dag-stage {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: max-content;
+    }
+
+    .dag-stage + .dag-stage::before {
+      content: "↓";
+      color: var(--muted);
+      padding: 0 4px;
+    }
+
+    .dag-node {
+      padding: 7px 9px;
+      border: 1px solid rgba(77, 182, 172, .5);
+      border-radius: 7px;
+      background: rgba(77, 182, 172, .1);
+      color: var(--text);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
     @media (max-width: 980px) {
       .app {
-        grid-template-columns: 280px minmax(0, 1fr);
+        grid-template-columns: 280px 6px minmax(0, 1fr);
       }
 
-      .details {
+      .details,
+      .resizer.right {
         display: none;
       }
     }
@@ -402,7 +603,19 @@
         <h2>匹配节点</h2>
         <div class="list" id="nodeList"></div>
       </div>
+
+      <div class="section stack">
+        <h2>节点详情</h2>
+        <div id="detailPanel" class="empty">点击一个节点查看详情。</div>
+      </div>
+
+      <div class="section stack">
+        <h2>关联边</h2>
+        <div class="list" id="edgeList"></div>
+      </div>
     </aside>
+
+    <div class="resizer left" id="leftResizer" title="拖动调整左栏宽度"></div>
 
     <main>
       <header>
@@ -418,14 +631,27 @@
       <canvas id="graphCanvas"></canvas>
     </main>
 
+    <div class="resizer right" id="rightResizer" title="拖动调整右栏宽度"></div>
+
     <aside class="details">
       <div class="section stack">
-        <h2>节点详情</h2>
-        <div id="detailPanel" class="empty">点击一个节点查看详情。</div>
+        <h2>在线编排</h2>
+        <textarea id="orchestrationQuery" placeholder="输入任务目标，例如：我们准备开放企业 API 平台，下个月给首批客户试用，帮我做上线前准备。"></textarea>
+        <div class="row">
+          <label class="check">Top-K</label>
+          <select id="orchestrationTopK" aria-label="推荐计划数量">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3" selected>3</option>
+            <option value="5">5</option>
+          </select>
+        </div>
+        <button id="runOrchestration" class="primary">生成编排计划</button>
+        <div id="orchestrationStatus" class="empty">输入任务目标后在下方生成计划图。</div>
       </div>
-      <div class="section stack">
-        <h2>关联边</h2>
-        <div class="list" id="edgeList"></div>
+      <div class="section stack orchestration-results-section">
+        <h2>在线编排结果</h2>
+        <div class="list" id="orchestrationResults"></div>
       </div>
     </aside>
   </div>
@@ -454,7 +680,14 @@
       folderInput: document.getElementById("folderInput"),
       zoomIn: document.getElementById("zoomIn"),
       zoomOut: document.getElementById("zoomOut"),
-      fitView: document.getElementById("fitView")
+      fitView: document.getElementById("fitView"),
+      orchestrationQuery: document.getElementById("orchestrationQuery"),
+      orchestrationTopK: document.getElementById("orchestrationTopK"),
+      runOrchestration: document.getElementById("runOrchestration"),
+      orchestrationStatus: document.getElementById("orchestrationStatus"),
+      orchestrationResults: document.getElementById("orchestrationResults"),
+      leftResizer: document.getElementById("leftResizer"),
+      rightResizer: document.getElementById("rightResizer")
     };
 
     const colors = {
@@ -1146,6 +1379,251 @@
     els.zoomOut.addEventListener("click", () => zoomAt(0.84));
     els.fitView.addEventListener("click", fitView);
     window.addEventListener("resize", resize);
+
+    // 编排功能
+    els.runOrchestration.addEventListener("click", runOrchestration);
+
+    async function runOrchestration() {
+      const query = els.orchestrationQuery.value.trim();
+      if (!query) {
+        els.orchestrationStatus.className = "empty status-error";
+        els.orchestrationStatus.textContent = "请输入任务目标。";
+        return;
+      }
+
+      els.runOrchestration.disabled = true;
+      els.orchestrationStatus.className = "status-loading";
+      els.orchestrationStatus.innerHTML = '<span class="loading-spinner"></span>正在生成编排计划...';
+      els.orchestrationResults.innerHTML = '<div class="plan-card loading"><div class="empty">处理中，请稍候...</div></div>';
+
+      try {
+        const response = await fetch("/api/orchestrate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query,
+            top_k: parseInt(els.orchestrationTopK.value, 10),
+            build_dir: getOutputDirFromUrl() || "OUTPUT/build"
+          })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: "请求失败" }));
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+
+        const result = await response.json();
+        renderOrchestrationResults(result);
+
+        els.orchestrationStatus.className = "empty";
+        const planCount = result.recommended_plans?.length || 0;
+        els.orchestrationStatus.textContent = `已生成 ${planCount} 个推荐计划。`;
+      } catch (error) {
+        els.orchestrationStatus.className = "empty status-error";
+        els.orchestrationStatus.textContent = `生成失败：${error.message}`;
+        els.orchestrationResults.innerHTML = `<div class="empty status-error">${escapeHtml(error.message)}</div>`;
+      } finally {
+        els.runOrchestration.disabled = false;
+      }
+    }
+
+    function renderOrchestrationResults(result) {
+      const plans = result.recommended_plans || [];
+      if (!plans.length) {
+        els.orchestrationResults.innerHTML = '<div class="empty">没有找到合适的编排计划。</div>';
+        return;
+      }
+
+      els.orchestrationResults.innerHTML = plans.map((plan, index) => {
+        const stages = plan.stages || [];
+        const reason = plan.reason || "";
+        const edges = plan.can_feed_edges || [];
+        const dagHtml = renderDag(stages, edges);
+        const graphMeta = `<div class="plan-meta">skills: ${countStageSkills(stages)} · directed edges: ${edges.length}</div>`;
+        const reasonHtml = reason ? `<div class="plan-meta">${escapeHtml(reason)}</div>` : "";
+        const missing = plan.missing_inputs || [];
+        const missingHtml = missing.length
+          ? `<div class="plan-meta">缺失输入：${escapeHtml(formatMissing(missing))}</div>`
+          : "";
+        const status = plan.status || "unknown";
+        const title = plan.title || `方案 ${index + 1}`;
+
+        return `
+          <div class="plan-card">
+            <h3>${escapeHtml(title)} · ${escapeHtml(status)}</h3>
+            ${graphMeta}
+            ${dagHtml}
+            ${missingHtml}
+            ${reasonHtml}
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderDag(stages, edges = []) {
+      if (!stages || !stages.length) return "";
+      const stageSkills = stages.map(stage => (
+        stage.skill_order || (stage.skills || []).map(skill => skill.skill_id || skill.name || skill.id)
+      ).filter(Boolean));
+      const positions = new Map();
+      const nodeW = 214;
+      const nodeH = 46;
+      const gapX = 110;
+      const gapY = 26;
+      const padX = 28;
+      const padY = 44;
+      const maxRows = Math.max(1, ...stageSkills.map(items => items.length || 1));
+      const width = Math.max(260, padX * 2 + stageSkills.length * nodeW + Math.max(0, stageSkills.length - 1) * gapX);
+      const height = Math.max(120, padY * 2 + maxRows * nodeH + Math.max(0, maxRows - 1) * gapY);
+      const nodes = [];
+
+      stageSkills.forEach((skills, stageIndex) => {
+        const totalH = skills.length * nodeH + Math.max(0, skills.length - 1) * gapY;
+        const startY = (height - totalH) / 2;
+        skills.forEach((skillId, rowIndex) => {
+          const id = String(skillId);
+          const x = padX + stageIndex * (nodeW + gapX);
+          const y = startY + rowIndex * (nodeH + gapY);
+          positions.set(id, { x, y, w: nodeW, h: nodeH });
+          nodes.push({ id, x, y });
+        });
+      });
+
+      const graphEdges = (edges || [])
+        .map(edge => ({
+          source: String(edge.source_id || ""),
+          target: String(edge.target_id || ""),
+          confidence: edge.confidence,
+          method: edge.method,
+          title: edgeTitle(edge),
+        }))
+        .filter(edge => positions.has(edge.source) && positions.has(edge.target));
+
+      const markerId = `arrow_${Math.random().toString(36).slice(2)}`;
+      const edgeHtml = graphEdges.map(edge => {
+        const a = positions.get(edge.source);
+        const b = positions.get(edge.target);
+        const x1 = a.x + a.w;
+        const y1 = a.y + a.h / 2;
+        const x2 = b.x;
+        const y2 = b.y + b.h / 2;
+        const mid = Math.max(24, (x2 - x1) / 2);
+        const label = edge.confidence === undefined || edge.confidence === null
+          ? ""
+          : Number(edge.confidence).toFixed(2);
+        const labelX = (x1 + x2) / 2;
+        const labelY = (y1 + y2) / 2 - 10;
+        const labelHtml = label
+          ? `<g class="flow-edge-label"><rect x="${labelX - 22}" y="${labelY - 9}" width="44" height="18"></rect><text x="${labelX}" y="${labelY}">${escapeHtml(label)}</text></g>`
+          : "";
+        return `
+          <path class="flow-edge" marker-end="url(#${markerId})" d="M ${x1} ${y1} C ${x1 + mid} ${y1}, ${x2 - mid} ${y2}, ${x2} ${y2}">
+            <title>${escapeHtml(edge.title)}</title>
+          </path>
+          ${labelHtml}
+        `;
+      }).join("");
+      const nodeHtml = nodes.map(node => {
+        const pos = positions.get(node.id);
+        const displayId = shortenSkillId(node.id);
+        return `
+          <g class="flow-node">
+            <title>${escapeHtml(node.id)}</title>
+            <rect x="${pos.x}" y="${pos.y}" width="${pos.w}" height="${pos.h}"></rect>
+            <text x="${pos.x + pos.w / 2}" y="${pos.y + pos.h / 2}">${escapeHtml(displayId)}</text>
+          </g>
+        `;
+      }).join("");
+      const columnLabels = stageSkills.map((skills, index) => {
+        const x = padX + index * (nodeW + gapX) + nodeW / 2;
+        const label = skills.length > 1 ? `并行组 ${index + 1}` : `执行组 ${index + 1}`;
+        return `<text class="flow-column-label" x="${x}" y="18">${escapeHtml(label)}</text>`;
+      }).join("");
+      const note = graphEdges.length
+        ? ""
+        : '<div class="flow-empty-edge-note">当前计划没有可展示的 can_feed 有向边，只有单个入口 skill 或边未进入该候选计划。</div>';
+      return `
+        <div class="flow-frame">
+          <svg class="flow-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Skill directed orchestration graph">
+            <defs>
+              <marker id="${markerId}" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#9aa6b9"></path>
+              </marker>
+            </defs>
+            ${columnLabels}
+            ${edgeHtml}
+            ${nodeHtml}
+          </svg>
+          ${note}
+        </div>
+      `;
+    }
+
+    function countStageSkills(stages) {
+      return stages.reduce((total, stage) => {
+        const skills = stage.skill_order || stage.skills || [];
+        return total + skills.length;
+      }, 0);
+    }
+
+    function shortenSkillId(id) {
+      const text = String(id || "");
+      return text.length > 28 ? `${text.slice(0, 25)}...` : text;
+    }
+
+    function edgeTitle(edge) {
+      const parts = [
+        `${edge.source_id || ""} -> ${edge.target_id || ""}`,
+      ];
+      if (edge.confidence !== undefined && edge.confidence !== null) {
+        parts.push(`confidence: ${Number(edge.confidence).toFixed(2)}`);
+      }
+      if (edge.method) parts.push(`method: ${edge.method}`);
+      for (const item of edge.source_outputs || []) parts.push(`output: ${item}`);
+      for (const item of edge.target_inputs || []) parts.push(`input: ${item}`);
+      for (const item of edge.reasons || []) parts.push(`reason: ${item}`);
+      return parts.filter(Boolean).join("\n");
+    }
+
+    function formatMissing(items) {
+      return items.map(item => `${item.skill_id || ""}:${item.name || ""}(${item.type || "unknown"})`).join(", ");
+    }
+
+    function setupResizer(handle, side) {
+      let dragging = false;
+      handle.addEventListener("pointerdown", event => {
+        dragging = true;
+        handle.classList.add("dragging");
+        handle.setPointerCapture(event.pointerId);
+        event.preventDefault();
+      });
+      handle.addEventListener("pointermove", event => {
+        if (!dragging) return;
+        const rect = document.querySelector(".app").getBoundingClientRect();
+        if (side === "left") {
+          const width = Math.max(240, Math.min(560, event.clientX - rect.left));
+          document.documentElement.style.setProperty("--left-width", `${width}px`);
+        } else {
+          const width = Math.max(300, Math.min(680, rect.right - event.clientX));
+          document.documentElement.style.setProperty("--right-width", `${width}px`);
+        }
+        resize();
+      });
+      const stop = event => {
+        if (!dragging) return;
+        dragging = false;
+        handle.classList.remove("dragging");
+        try {
+          handle.releasePointerCapture(event.pointerId);
+        } catch {}
+        resize();
+      };
+      handle.addEventListener("pointerup", stop);
+      handle.addEventListener("pointercancel", stop);
+    }
+
+    setupResizer(els.leftResizer, "left");
+    setupResizer(els.rightResizer, "right");
 
     resize();
     loadDefault();

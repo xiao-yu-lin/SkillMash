@@ -14,7 +14,9 @@ PRIORITY_RANK = {"high": 3, "medium": 2, "low": 1}
 DEFAULT_GENERIC_IO_NAMES = frozenset(
     {
         "dependencies",
+        "code",
         "existing_apis",
+        "path",
         "review_report",
         "use_case_description",
     }
@@ -30,6 +32,24 @@ DEFAULT_STOP_TERMS = frozenset(
         "this",
         "that",
         "with",
+    }
+)
+CAN_FEED_WEAK_TERMS = frozenset(
+    {
+        "analysis",
+        "analyze",
+        "config",
+        "configuration",
+        "dependencies",
+        "document",
+        "findings",
+        "input",
+        "output",
+        "parallel",
+        "report",
+        "review",
+        "role",
+        "team",
     }
 )
 
@@ -133,7 +153,7 @@ class CandidateGenerator:
                             continue
                         if output.type == "unknown":
                             continue
-                        if not shared_terms and output.name != parameter.name:
+                        if not _can_feed_by_field_overlap(output, parameter):
                             continue
                         self._merge_candidate(
                             candidates,
@@ -403,6 +423,14 @@ def _skill_terms(skill: SkillRepresentation) -> Set[str]:
     for chunk in chunks:
         terms.update(_tokenize(chunk))
     return terms
+
+
+def _can_feed_by_field_overlap(output: ArtifactSpec, parameter: ParameterSpec) -> bool:
+    if output.name == parameter.name:
+        return True
+    output_terms = _tokenize(f"{output.name} {output.description}") - CAN_FEED_WEAK_TERMS
+    input_terms = _tokenize(f"{parameter.name} {parameter.description}") - CAN_FEED_WEAK_TERMS
+    return bool(output_terms & input_terms)
 
 
 def _tokenize(text: str) -> Set[str]:

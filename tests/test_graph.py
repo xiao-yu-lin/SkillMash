@@ -194,6 +194,63 @@ def test_validate_llm_matches_accepts_candidate_backed_match() -> None:
     assert matches[0].candidate_id == candidate.key
 
 
+def test_validate_llm_matches_parses_decorated_supporting_field_strings() -> None:
+    registry = SkillRegistryBuilder().register(
+        [_web_search_skill(), _summarize_skill()]
+    )
+    candidates = CandidateGenerator().generate(registry)
+    candidate = next(
+        item
+        for item in candidates
+        if item.source_id == "web_search"
+        and item.target_id == "summarize_text"
+        and "can_feed" in item.relation_hints
+    )
+
+    matches, diagnostics = validate_llm_matches(
+        {
+            "matches": [
+                {
+                    "candidate_id": candidate.key,
+                    "source_id": "web_search",
+                    "target_id": "summarize_text",
+                    "relation_type": "can_feed",
+                    "confidence": 0.91,
+                    "reasons": ["decorated fields should still validate."],
+                    "supporting_fields": {
+                        "source_outputs": ["search_results (json): web hits"],
+                        "target_inputs": ["search_results: search hits"],
+                    },
+                }
+            ]
+        },
+        registry,
+        [candidate],
+    )
+
+    assert diagnostics == []
+    assert len(matches) == 1
+    assert matches[0].accepted is True
+
+
+def test_graph_builder_adds_deterministic_exact_io_edges() -> None:
+    class EmptyMatcher:
+        def match(self, registry, candidates):
+            return []
+
+    result = GraphBuilder(matcher=EmptyMatcher()).build(
+        [_web_search_skill(), _summarize_skill()]
+    )
+
+    edge_types = {(edge.source, edge.target, edge.type, edge.method) for edge in result.graph.edges}
+    assert (
+        "skill:web_search",
+        "skill:summarize_text",
+        "can_feed",
+        "deterministic_exact_io_match",
+    ) in edge_types
+
+
 def test_graph_builder_pipeline_writes_expected_artifacts(tmp_path: Path) -> None:
     result = GraphBuilder(matcher=AcceptingMatcher()).build(
         [_web_search_skill(), _summarize_skill()]

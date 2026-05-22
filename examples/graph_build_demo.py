@@ -179,8 +179,8 @@ def main() -> None:
     parser.add_argument(
         "--can_feed_threshold",
         type=float,
-        default=0.0,
-        help="Minimum confidence for accepting can_feed matches. Defaults to 0.",
+        default=0.7,
+        help="Minimum confidence for accepting can_feed matches. Defaults to 0.7.",
     )
     parser.add_argument(
         "--similar_to_threshold",

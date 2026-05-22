@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from threading import RLock
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from skillmash.representation.base_vocab import term_similarity
 from skillmash.representation.io_name_vocab import (
     HeuristicIONameResolver,
     IONameCandidate,
@@ -309,6 +310,7 @@ class SkillRepresentationNormalizer:
                 manifest,
                 skill_id,
                 "input",
+                diagnostics,
                 decisions,
             )
             if name is None:
@@ -401,6 +403,7 @@ class SkillRepresentationNormalizer:
                 manifest,
                 skill_id,
                 "output",
+                diagnostics,
                 decisions,
             )
             if name is None:
@@ -598,6 +601,7 @@ class SkillRepresentationNormalizer:
         manifest: RawSkillManifest,
         skill_id: str,
         direction: str,
+        diagnostics: List[ExtractionDiagnostic],
         decisions: List[NormalizationDecision],
     ) -> Optional[str]:
         token = normalize_parameter_name(raw_name)
@@ -638,7 +642,16 @@ class SkillRepresentationNormalizer:
             )
             with self._io_name_resolution_cache_lock:
                 self._io_name_resolution_cache[token] = resolution
-        normalized = self._apply_io_name_resolution(token, raw_type, description, resolution)
+        normalized = self._apply_io_name_resolution(
+            token,
+            raw_type,
+            description,
+            resolution,
+            manifest,
+            skill_id,
+            direction,
+            diagnostics,
+        )
         self._record_decision(
             decisions,
             skill_id=skill_id,
@@ -667,11 +680,22 @@ class SkillRepresentationNormalizer:
         raw_type: str,
         description: str,
         resolution: IONameResolution,
+        manifest: RawSkillManifest,
+        skill_id: str,
+        direction: str,
+        diagnostics: List[ExtractionDiagnostic],
     ) -> Optional[str]:
         if resolution.action == "exclude_non_runtime":
             return None
 
         if resolution.action == "create_new" and not self.io_name_vocabulary.is_full():
+            self._warn_possible_duplicate_io_name(
+                token,
+                manifest,
+                skill_id,
+                direction,
+                diagnostics,
+            )
             return self.io_name_vocabulary.create_term(
                 resolution.normalized_value or token,
                 alias=token,
@@ -696,6 +720,42 @@ class SkillRepresentationNormalizer:
             example=description,
         )
         return target
+
+    def _warn_possible_duplicate_io_name(
+        self,
+        token: str,
+        manifest: RawSkillManifest,
+        skill_id: str,
+        direction: str,
+        diagnostics: List[ExtractionDiagnostic],
+    ) -> None:
+        threshold = self.config.possible_duplicate_name_similarity_threshold
+        if threshold <= 0:
+            return
+        term_names = self.io_name_vocabulary.term_names()
+        if not term_names:
+            return
+        closest = max(term_names, key=lambda name: term_similarity(token, name))
+        score = term_similarity(token, closest)
+        if score < threshold:
+            return
+        diagnostics.append(
+            ExtractionDiagnostic(
+                stage="normalization",
+                severity="warning",
+                code="possible_duplicate_io_name",
+                message="new I/O name is similar to an existing vocabulary term; review aliasing",
+                skill_id=skill_id,
+                path=str(manifest.folder.path),
+                details={
+                    "direction": direction,
+                    "token": token,
+                    "closest_term": closest,
+                    "similarity": round(score, 4),
+                    "threshold": threshold,
+                },
+            )
+        )
 
     def _normalize_semantic_vocab_value(
         self,

@@ -14,8 +14,10 @@
 SkillRegistryBuilder
 CandidateGenerator
 LLMOntologyMatcher
+RelationResolver
 SkillGraphBuilder
 SkillIndexBuilder
+ArtifactLexicon
 GraphDiagnostics
 BuildArtifactWriter
 ```
@@ -27,8 +29,10 @@ BuildArtifactWriter
 | `SkillRegistryBuilder` | 注册并校验 `SkillRepresentation`，处理重复 ID 和缺失字段。 |
 | `CandidateGenerator` | 基于 input/output/task/type/text 倒排索引生成高召回候选对。 |
 | `LLMOntologyMatcher` | 将候选对和 `description/tasks/inputs/outputs` 组织成 LLM 输入，生成关联判断和匹配证据。 |
+| `RelationResolver` | 聚合 LLM 匹配和确定性 exact-io 匹配，并统一输出关系诊断。 |
 | `SkillGraphBuilder` | 将 Skill 节点和 LLM 匹配边组装为 typed graph。 |
 | `SkillIndexBuilder` | 生成在线检索需要的倒排索引、邻接索引和候选计划入口。 |
+| `ArtifactLexicon` | 提供统一的分词、停用词和 generic I/O 名称过滤规则。 |
 | `GraphDiagnostics` | 记录冲突、低置信关联、孤立节点和不可闭合输入。 |
 | `BuildArtifactWriter` | 写出 manifest、skills、graph、index、llm_matches 和 diagnostics。 |
 

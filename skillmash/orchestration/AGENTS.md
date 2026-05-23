@@ -4,6 +4,14 @@
 loads the graph, index, and Skill metadata, grounds a user query, and searches
 candidate plans over accepted `can_feed` edges.
 
+Current module shape:
+
+- `artifacts.py`: build artifact loading contract.
+- `planner.py`: public compatibility facade.
+- `planning/`: deep planning implementation split into grounding, search,
+  orchestration interface, and planning contracts.
+- `skillmash.lexicon`: shared lexical seam used by planning tokenization.
+
 ## Responsibilities
 
 - Load build artifacts with `load_build_artifacts`.

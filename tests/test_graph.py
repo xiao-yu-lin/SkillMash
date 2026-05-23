@@ -5,6 +5,7 @@ from pathlib import Path
 from skillmash.graph import (
     CandidateGenerator,
     GraphBuilder,
+    GraphDiagnostic,
     LLMMatch,
     SkillIndexBuilder,
     SkillRegistryBuilder,
@@ -276,6 +277,71 @@ def test_graph_builder_pipeline_writes_expected_artifacts(tmp_path: Path) -> Non
     assert (tmp_path / "skill_index.json").exists()
     assert (tmp_path / "llm_matches.json").exists()
     assert (tmp_path / "diagnostics.json").exists()
+
+
+def test_graph_builder_uses_match_diagnostics_without_matcher_diagnostics() -> None:
+    class MatchWithDiagnosticsMatcher:
+        def match(self, registry, candidates):
+            return [
+                LLMMatch(
+                    source_id="web_search",
+                    target_id="summarize_text",
+                    relation_type="can_feed",
+                    confidence=0.8,
+                    method="test_matcher",
+                    accepted=True,
+                    diagnostics=["output type mismatch risk"],
+                )
+            ]
+
+    result = GraphBuilder(matcher=MatchWithDiagnosticsMatcher()).build(
+        [_web_search_skill(), _summarize_skill()]
+    )
+
+    assert any(
+        diagnostic.code == "match_diagnostic"
+        and "mismatch" in diagnostic.message
+        for diagnostic in result.diagnostics
+    )
+
+
+def test_graph_builder_prefers_matcher_level_diagnostics() -> None:
+    class MatcherWithOwnDiagnostics:
+        diagnostics = []
+
+        def match(self, registry, candidates):
+            self.diagnostics = [
+                GraphDiagnostic(
+                    stage="llm_match",
+                    severity="info",
+                    code="matcher_info",
+                    message="matcher emitted own diagnostics",
+                )
+            ]
+            return [
+                LLMMatch(
+                    source_id="web_search",
+                    target_id="summarize_text",
+                    relation_type="can_feed",
+                    confidence=0.8,
+                    method="test_matcher",
+                    accepted=True,
+                    diagnostics=["should not be surfaced when matcher has diagnostics"],
+                )
+            ]
+
+    result = GraphBuilder(matcher=MatcherWithOwnDiagnostics()).build(
+        [_web_search_skill(), _summarize_skill()]
+    )
+
+    assert any(
+        diagnostic.code == "matcher_info"
+        for diagnostic in result.diagnostics
+    )
+    assert not any(
+        getattr(diagnostic, "code", "") == "match_diagnostic"
+        for diagnostic in result.diagnostics
+    )
 
 
 def _web_search_skill() -> SkillRepresentation:

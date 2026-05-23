@@ -2,33 +2,20 @@
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from typing import Dict, Iterable, List, Set
 
+from skillmash.lexicon import (
+    ArtifactLexicon,
+    DEFAULT_GRAPH_INDEX_GENERIC_IO_NAMES,
+    DEFAULT_GRAPH_STOP_TERMS,
+)
 from skillmash.graph.models import SkillGraph, SkillIndex, SkillRegistry
 
 
-DEFAULT_GENERIC_IO_NAMES = frozenset(
-    {
-        "dependencies",
-        "existing_apis",
-        "review_report",
-        "use_case_description",
-    }
-)
-DEFAULT_STOP_TERMS = frozenset(
-    {
-        "and",
-        "are",
-        "for",
-        "from",
-        "into",
-        "the",
-        "this",
-        "that",
-        "with",
-    }
+_GRAPH_TERM_LEXICON = ArtifactLexicon.create(
+    stop_terms=DEFAULT_GRAPH_STOP_TERMS,
+    min_token_length=3,
 )
 
 
@@ -38,11 +25,15 @@ class SkillIndexBuilder:
     def __init__(
         self,
         *,
-        generic_io_names: Iterable[str] = DEFAULT_GENERIC_IO_NAMES,
+        generic_io_names: Iterable[str] = DEFAULT_GRAPH_INDEX_GENERIC_IO_NAMES,
         max_io_bucket_size: int = 16,
         max_text_bucket_size: int = 24,
     ) -> None:
-        self.generic_io_names = {name.lower() for name in generic_io_names}
+        self.lexicon = ArtifactLexicon.create(
+            stop_terms=DEFAULT_GRAPH_STOP_TERMS,
+            min_token_length=3,
+            generic_io_names=generic_io_names,
+        )
         self.max_io_bucket_size = max(1, max_io_bucket_size)
         self.max_text_bucket_size = max(2, max_text_bucket_size)
 
@@ -55,11 +46,11 @@ class SkillIndexBuilder:
 
         for skill in registry.ordered_skills():
             for output in skill.outputs:
-                if output.name.lower() not in self.generic_io_names:
+                if not self.lexicon.is_generic_io_name(output.name):
                     by_output[output.name].add(skill.id)
                 by_data_type[output.type].add(skill.id)
             for parameter in skill.inputs:
-                if parameter.name.lower() not in self.generic_io_names:
+                if not self.lexicon.is_generic_io_name(parameter.name):
                     by_input[parameter.name].add(skill.id)
                 by_data_type[parameter.type].add(skill.id)
             for task in skill.tasks:
@@ -93,7 +84,7 @@ class SkillIndexBuilder:
                     & skill_inputs.get(target_id, set())
                 )
                 for name in shared:
-                    if name.lower() in self.generic_io_names:
+                    if self.lexicon.is_generic_io_name(name):
                         continue
                     upstream_by_input[name].add(source_id)
                     downstream_by_output[name].add(target_id)
@@ -152,8 +143,4 @@ def _skill_terms(skill) -> Set[str]:
 
 
 def _tokenize(text: str) -> Set[str]:
-    return {
-        token
-        for token in re.split(r"[^a-z0-9]+", str(text).lower())
-        if len(token) >= 3 and token not in DEFAULT_STOP_TERMS
-    }
+    return _GRAPH_TERM_LEXICON.tokenize(text)

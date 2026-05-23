@@ -2,38 +2,19 @@
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from typing import Dict, Iterable, List, MutableMapping, Set, Tuple
 
 from skillmash.graph.models import ALLOWED_RELATION_TYPES, RelationCandidate, SkillRegistry
+from skillmash.lexicon import (
+    ArtifactLexicon,
+    DEFAULT_GRAPH_CANDIDATE_GENERIC_IO_NAMES,
+    DEFAULT_GRAPH_STOP_TERMS,
+)
 from skillmash.representation.models import ArtifactSpec, ParameterSpec, SkillRepresentation
 
 
 PRIORITY_RANK = {"high": 3, "medium": 2, "low": 1}
-DEFAULT_GENERIC_IO_NAMES = frozenset(
-    {
-        "dependencies",
-        "code",
-        "existing_apis",
-        "path",
-        "review_report",
-        "use_case_description",
-    }
-)
-DEFAULT_STOP_TERMS = frozenset(
-    {
-        "and",
-        "are",
-        "for",
-        "from",
-        "into",
-        "the",
-        "this",
-        "that",
-        "with",
-    }
-)
 CAN_FEED_WEAK_TERMS = frozenset(
     {
         "analysis",
@@ -52,6 +33,10 @@ CAN_FEED_WEAK_TERMS = frozenset(
         "team",
     }
 )
+_GRAPH_TERM_LEXICON = ArtifactLexicon.create(
+    stop_terms=DEFAULT_GRAPH_STOP_TERMS,
+    min_token_length=3,
+)
 
 
 class CandidateGenerator:
@@ -61,12 +46,16 @@ class CandidateGenerator:
         self,
         *,
         max_candidates_per_skill_relation: int = 12,
-        generic_io_names: Iterable[str] = DEFAULT_GENERIC_IO_NAMES,
+        generic_io_names: Iterable[str] = DEFAULT_GRAPH_CANDIDATE_GENERIC_IO_NAMES,
         max_exact_io_pair_fanout: int = 64,
         max_text_term_bucket_size: int = 12,
     ) -> None:
         self.max_candidates_per_skill_relation = max_candidates_per_skill_relation
-        self.generic_io_names = {name.lower() for name in generic_io_names}
+        self.lexicon = ArtifactLexicon.create(
+            stop_terms=DEFAULT_GRAPH_STOP_TERMS,
+            min_token_length=3,
+            generic_io_names=generic_io_names,
+        )
         self.max_exact_io_pair_fanout = max(1, max_exact_io_pair_fanout)
         self.max_text_term_bucket_size = max(2, max_text_term_bucket_size)
 
@@ -98,7 +87,7 @@ class CandidateGenerator:
         candidates: MutableMapping[Tuple[str, str], RelationCandidate],
     ) -> None:
         for name in sorted(set(indexes.by_output_name) & set(indexes.by_input_name)):
-            if name.lower() in self.generic_io_names:
+            if self.lexicon.is_generic_io_name(name):
                 continue
             pair_fanout = (
                 len(indexes.by_output_name[name]) * len(indexes.by_input_name[name])
@@ -434,8 +423,4 @@ def _can_feed_by_field_overlap(output: ArtifactSpec, parameter: ParameterSpec) -
 
 
 def _tokenize(text: str) -> Set[str]:
-    return {
-        token
-        for token in re.split(r"[^a-z0-9]+", str(text).lower())
-        if len(token) >= 3 and token not in DEFAULT_STOP_TERMS
-    }
+    return _GRAPH_TERM_LEXICON.tokenize(text)

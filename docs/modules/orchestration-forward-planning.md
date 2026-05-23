@@ -10,8 +10,13 @@ The current implementation lives under `skillmash.orchestration`:
 
 - `artifacts.py`: loads `build_manifest.json`, `skills.json`,
   `skill_graph.json`, `skill_index.json`, and optional vocabulary files.
-- `planner.py`: asks the LLM to ground the query into the offline vocabulary,
-  validates that grounding, then searches candidate plans over `can_feed` edges.
+- `planner.py`: compatibility facade that preserves the public import path.
+- `planning/`: internal modules split by seam:
+  - `orchestrator.py`: top-level planning interface.
+  - `grounding.py`: LLM query grounding and vocabulary validation.
+  - `search.py`: bounded graph search, DAG composition, and plan shaping.
+  - `models.py`: planning contracts.
+- `skillmash.lexicon`: shared lexical seam for planning tokenization rules.
 - `skillmash.reranking`: asks the LLM to rank candidate paths into Top-K
   recommended plans.
 - `examples/graph_online_demo.py`: thin command-line entrypoint.

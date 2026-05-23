@@ -9,7 +9,11 @@ retrieval and orchestration.
 - Build a validated Skill registry from normalized representations.
 - Generate cheap deterministic relation candidates before any LLM call.
 - Validate LLM relation judgments and keep traceable match artifacts.
+- Resolve final relation edges through `RelationResolver` (LLM + deterministic
+  exact-I/O rules + diagnostics aggregation).
 - Build the Skill-only graph and lookup indexes.
+- Reuse lexical rules from `skillmash.lexicon` for tokenization and generic
+  I/O-name filtering.
 - Write graph build artifacts through `write_graph_build_result`.
 
 ## Relation Types

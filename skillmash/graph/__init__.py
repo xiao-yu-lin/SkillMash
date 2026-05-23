@@ -23,6 +23,7 @@ from skillmash.graph.models import (
     SkillRegistry,
 )
 from skillmash.graph.pipeline import GraphBuilder
+from skillmash.graph.relation_resolution import RelationResolver
 from skillmash.graph.registry import SkillRegistryBuilder
 from skillmash.graph.writer import write_graph_build_result, write_json_file
 
@@ -40,6 +41,7 @@ __all__ = [
     "OntologyMatcher",
     "OpenAICompatibleOntologyMatcher",
     "RelationCandidate",
+    "RelationResolver",
     "SkillGraph",
     "SkillGraphBuilder",
     "SkillIndex",

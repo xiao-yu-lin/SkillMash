@@ -17,8 +17,7 @@ The current implementation lives under `skillmash.orchestration`:
   - `search.py`: bounded graph search, DAG composition, and plan shaping.
   - `models.py`: planning contracts.
 - `skillmash.lexicon`: shared lexical seam for planning tokenization rules.
-- `skillmash.reranking`: asks the LLM to rank candidate paths into Top-K
-  recommended plans.
+- `skillmash.reranking`: LLM ranking implementation and standalone reranking facade.
 - `examples/graph_online_demo.py`: thin command-line entrypoint.
 
 ## 2. Planning Flow
@@ -30,7 +29,9 @@ user query
   -> find entry Skills that consume grounded artifacts or match goal terms
   -> run forward search over can_feed graph
   -> compose shared-upstream paths into DAG candidate plans
-  -> LLM rerank candidate plans into Top-K recommended plans
+  -> build slot substitution candidates from substitute_for/similar_to
+  -> LLM rank Top-M candidates into Top-K recommendations
+  -> deterministic fallback when LLM ranking fails or returns insufficient results
 ```
 
 The LLM is part of the orchestration path. It is responsible for natural-language
@@ -56,6 +57,8 @@ The prompt provides only offline vocabulary:
 - output vocabulary from `skill_index.json`;
 - task vocabulary from `task_vocab.json` and `skill_index.json`;
 - aliases and examples from `io_name_vocab.json` when available.
+- shared lexical normalization from `skillmash.lexicon` (case folding, full/half
+  width normalization, and consistent Chinese/English token handling).
 
 The LLM output is then validated:
 
@@ -64,6 +67,9 @@ The LLM output is then validated:
 - goal terms are tokenized before being used for local scoring;
 - implicit `goal:text` and `query:text` are always added because the user query
   itself is a runtime artifact.
+
+Token matching should use the same shared normalization in both offline index
+build and online retrieval to avoid vocabulary drift between stages.
 
 ## 4. Forward Search
 
@@ -82,6 +88,8 @@ From each entry node it performs bounded BFS over `can_feed` edges:
 Each state carries selected Skill IDs, available artifact `(name, type)` pairs,
 and `can_feed` edges used so far. When a Skill is added, its outputs are added to
 the available artifact set.
+
+`similar_to` and `substitute_for` are not used to expand search paths.
 
 Linear paths that share an upstream producer are composed into DAG plans. For
 example, if the graph contains both `wisedev-team -> api-design-review-team` and
@@ -109,18 +117,28 @@ Each candidate plan includes:
   step consumes.
 
 Candidate plans are ranked by readiness, missing input count, explicit user
-artifact consumption, path length, goal score, and edge confidence.
+artifact consumption, path length, goal score, and edge confidence. The current
+default ranker is LLM-based with deterministic fallback.
 
 ## 6. Reranking
 
-`PlanReranker` receives the bounded DAG candidate plans and asks the LLM to
-choose the best existing candidates. It does not merge plans and does not change
-Skill order or stages. The LLM returns candidate `plan_index` values, and invalid
+The default ranker receives bounded candidate plans and asks the LLM to choose
+the best existing candidates. It does not merge plans and does not change Skill
+order or stages. The LLM returns candidate `plan_index` values, and invalid
 indexes are dropped during validation.
 
-`top_k` controls the number of recommended plans returned by the reranker. The
-demo prints recommended plans by default and shows raw candidate paths only when
-`--show_candidates` is passed.
+Defaults:
+
+- `top_m = 12` candidate plans sent to LLM.
+- `top_k = 3` recommended plans returned.
+- when LLM output is invalid or fewer than `top_k`, deterministic ranking fills
+  the remaining slots.
+
+Response defaults:
+
+- return both `plans` and `recommended_plans`.
+- `recommended_plans` returns references (`source_plan_index`) plus summary.
+- include `ranking_mode` (`llm` or `fallback`) and rank trace metadata.
 
 ## 7. Example
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -61,6 +62,9 @@ DEFAULT_GRAPH_INDEX_GENERIC_IO_NAMES = frozenset(
     }
 )
 
+_ASCII_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_CJK_CHUNK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
+
 
 @dataclass(frozen=True)
 class ArtifactLexicon:
@@ -79,17 +83,40 @@ class ArtifactLexicon:
         generic_io_names: Iterable[str] = (),
     ) -> "ArtifactLexicon":
         return cls(
-            stop_terms=frozenset(str(term).lower() for term in stop_terms),
+            stop_terms=frozenset(normalize_text(term) for term in stop_terms),
             min_token_length=max(1, int(min_token_length)),
-            generic_io_names=frozenset(str(name).lower() for name in generic_io_names),
+            generic_io_names=frozenset(
+                normalize_text(name) for name in generic_io_names
+            ),
         )
 
     def tokenize(self, text: str) -> set[str]:
-        return {
-            token
-            for token in re.split(r"[^a-z0-9]+", str(text).lower())
-            if len(token) >= self.min_token_length and token not in self.stop_terms
-        }
+        normalized = normalize_text(text)
+        tokens = set()
+
+        for token in _ASCII_TOKEN_RE.findall(normalized):
+            if len(token) >= self.min_token_length and token not in self.stop_terms:
+                tokens.add(token)
+
+        for chunk in _CJK_CHUNK_RE.findall(normalized):
+            if len(chunk) < 2:
+                continue
+            tokens.update(_cjk_terms(chunk))
+
+        return tokens
 
     def is_generic_io_name(self, name: str) -> bool:
-        return str(name).lower() in self.generic_io_names
+        return normalize_text(name) in self.generic_io_names
+
+
+def normalize_text(text: str) -> str:
+    return unicodedata.normalize("NFKC", str(text)).lower()
+
+
+def _cjk_terms(chunk: str) -> set[str]:
+    terms = {chunk}
+    if len(chunk) == 2:
+        return terms
+    for index in range(len(chunk) - 1):
+        terms.add(chunk[index : index + 2])
+    return terms

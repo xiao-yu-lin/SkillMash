@@ -179,7 +179,7 @@ sequenceDiagram
 5. 新增产物必须通过 manifest 暴露，不能依赖目录扫描猜测。
 6. 图谱必须区分确定性边和匹配推断边。
 7. 每条匹配推断边必须能追溯到 `llm_matches.json` 中的证据。
-8. 关联边必须带 `confidence` 和 `method`，在线规划默认只使用达到阈值的边。
+8. 关联边必须带 `confidence` 和 `method`；在线可执行路径默认只使用达到阈值的 `can_feed` 边。
 9. LLM 输出的 source、target、relation_type 必须经过程序侧 schema 和 ID 校验。
 10. LLM 不能新增不存在的 Skill，也不能新增未在 schema 中声明的边类型。
 11. LLM 调用必须记录 model、prompt_version、temperature 和输入摘要，保证构建结果可追踪。
@@ -290,8 +290,8 @@ by_text_term: description/name/task/input/output tokens -> skill ids
 LLM 需要判断：
 
 1. `can_feed`：A 的输出是否能满足 B 的输入。
-2. `similar_to`：两个 Skill 的能力是否相近。
-3. `substitute_for`：两个 Skill 是否可在相似上下文中替代。
+2. `similar_to`：两个 Skill 的能力是否相近（语义无向，持久化为双向边）。
+3. `substitute_for`：source 是否可替代 target（有向语义，不默认反向成立）。
 
 LLM 输出 schema：
 
@@ -336,8 +336,13 @@ LLM 输出 schema：
 | 边 | 含义 |
 | --- | --- |
 | `can_feed` | 一个 Skill 的输出可满足另一个 Skill 的输入。 |
-| `similar_to` | Skill 的任务、输入输出和描述语义相近。 |
-| `substitute_for` | Skill 在当前表征下可近似替代。 |
+| `similar_to` | Skill 的任务、输入输出和描述语义相近；语义无向，落盘为双向边。 |
+| `substitute_for` | source Skill 在当前表征下可替代 target Skill；有向语义。 |
+
+在线使用约束：
+
+1. 在线路径构造只使用 `can_feed`。
+2. `similar_to/substitute_for` 仅用于排序阶段的 slot 替换候选，不用于扩展新路径。
 
 ### 3.10 产物格式
 
@@ -423,6 +428,24 @@ web_search can_feed summarize_text
   evidence: output search_results == input search_results
 ```
 
+### 3.12 关系反馈闭环（离线）
+
+在线排序阶段可记录关系质量反馈（例如 `slot_no_viable_substitute`），但在线模块不直接改图。反馈用于下一次离线构建修边。
+
+推荐反馈记录粒度：
+
+```text
+(source_skill, target_skill, relation_type, slot_io_signature, reason_code, count)
+```
+
+推荐流程：
+
+1. 在线 append 反馈日志（默认 `.skillmash/runtime/relation_feedback.jsonl`，支持配置覆盖）。
+2. 离线执行 `build --apply-feedback` 时加载反馈。
+3. 在滚动窗口内按阈值触发降权：默认窗口为最近 `30` 天（支持配置），且需满足 `count >= 20` 与 `fail_rate >= 0.6`。
+4. 每次触发将目标边 `confidence -= 0.1`，下限 `0.0`，并记录 `degrade_epoch` 以追踪降权轮次。
+5. 降权结果只在下一次 build 产物中生效。
+
 ## 4. 实现分期
 
 ### 4.1 v1 LLM 构图
@@ -440,6 +463,7 @@ web_search can_feed summarize_text
 2. 分批调用 LLM，避免一次 prompt 过长。
 3. 对跨批次重复边做合并和置信度聚合。
 4. 将 LLM 原始输出和校验结果写入 diagnostics。
+5. 支持离线 `--apply-feedback`，按反馈统计对边做保守降权。
 
 ### 4.3 v3 可选增强
 
@@ -447,3 +471,4 @@ web_search can_feed summarize_text
 2. 对高价值、低置信候选调用二次 LLM validator。
 3. 支持外部领域词表或本体文件作为 `external_ontology`。
 4. 记录模型、prompt 版本和温度，提升构建可追踪性。
+5. 支持基于反馈的审查队列和人工确认禁用策略。

@@ -10,7 +10,7 @@ SkillMash 是一个面向 Agent Skill 生态的技能组织、表征提取、图
 Skill 数量和粒度不断增长，但系统缺少一种结构化方式理解、拆解、复用、组合和执行这些 Skill。
 ```
 
-系统不把 Skill 当成一个平铺列表，而是把 Skill 转成结构化表征，再构建成可检索、可推理、可规划的 Skill 图谱。在线阶段基于图谱边检索、边组织、边裁剪、边排序，最终形成可解释的执行计划。
+系统不把 Skill 当成一个平铺列表，而是把 Skill 转成结构化表征，再构建成可检索、可推理、可规划的 Skill 图谱。在线阶段基于图谱边检索、边组织、边排序，最终形成可解释的执行计划。
 
 当前阶段暂不实现安全审计。安全审计、组合风险模拟、工具权限策略和供应链治理作为未来扩展。
 
@@ -70,8 +70,8 @@ flowchart LR
 | --- | --- | --- | --- |
 | 表征提取 | 离线 | 从 Skill 文件夹和 `SKILL.md` 中提取结构化 Skill 表征 | [offline-representation-extraction.md](modules/offline-representation-extraction.md) |
 | 图构建 | 离线 | 基于 Skill 表征构建 Skill 图、索引和构建产物 | [offline-graph-construction.md](modules/offline-graph-construction.md) |
-| 编排与检索 | 在线 | 理解用户任务，召回候选 Skill，边检索边组织候选计划 | [online-orchestration-retrieval.md](modules/online-orchestration-retrieval.md) |
-| 裁剪与排序 | 在线 | 剪掉无效/冗余计划，对候选计划评分排序 | [online-pruning-ranking.md](modules/online-pruning-ranking.md) |
+| 编排与检索 | 在线 | 理解用户任务，基于 `can_feed` 召回并组织候选计划 | [online-orchestration-retrieval.md](modules/online-orchestration-retrieval.md) |
+| 裁剪与排序 | 在线 | 约束校验、候选替换、LLM 排序与确定性回退 | [online-pruning-ranking.md](modules/online-pruning-ranking.md) |
 | 执行 | 在线 | 接收 ExecutionPlan，调度 Skill 执行并记录结果与 trace | [online-execution.md](modules/online-execution.md) |
 
 ## 5. 阶段边界
@@ -101,7 +101,7 @@ skills_root/
   diagnostics.json
 ```
 
-离线阶段允许调用 LLM，因为它不是请求路径的一部分。LLM 负责把自然语言 Skill 描述转为结构化输入输出、Skill 标签、数据标签和约束。
+离线阶段允许调用 LLM，因为它不是请求路径的一部分。LLM 负责把自然语言 Skill 描述转为结构化输入输出和约束，并辅助推断 Skill-Skill 关系边。
 
 ### 5.2 在线阶段
 
@@ -133,7 +133,7 @@ Artifacts
 系统目标：
 
 1. 将文件夹形式 Skill 转成统一结构化表征。
-2. 构建包含 Skill、产物、标签和关系的 Skill 图谱。
+2. 构建 Skill-only 的关系图谱（节点仅 Skill，边为 Skill-Skill typed edge）。
 3. 让在线规划可以基于图谱边检索边组织候选方案。
 4. 对候选方案进行裁剪、去重、验证和排序。
 5. 用 ExecutionPlan 作为执行模块的稳定输入。
@@ -158,10 +158,9 @@ classDiagram
     id
     name
     description
+    tasks
     inputs
     outputs
-    skill_tags
-    data_tags
     constraints
     source
   }
@@ -174,7 +173,7 @@ classDiagram
   class Goal {
     task
     required_outputs
-    required_skill_tags
+    required_capabilities
     constraints
   }
 
@@ -264,35 +263,33 @@ UserTask
   -> ExecutionPlan
 ```
 
-在线规划的关键是“边检索，边组织”：
+在线规划的关键是“边检索，边组织，再排序”：
 
 1. 先根据用户目标召回可能满足最终输出的 Skill。
 2. 根据候选 Skill 的输入缺口反向检索上游 Skill。
 3. 形成候选计划草案。
-4. 将候选计划交给裁剪与排序模块。
+4. 将候选计划交给排序模块做约束校验、候选替换与排序。
 
 ### 6.6 图谱视图
 
-Skill 图谱包含四类核心节点：
+Skill 图谱在 v1 只包含 Skill 节点：
 
 | 节点 | 示例 |
 | --- | --- |
-| Skill 节点 | `web_search` |
-| Artifact 节点 | `artifact:pptx` |
-| SkillTag 节点 | `tag:web_search` |
-| DataTag 节点 | `data:paper` |
+| Skill 节点 | `skill:web_search` |
 
-核心边：
+核心边（Skill-Skill）：
 
 | 边 | 含义 |
 | --- | --- |
-| `produces` | Skill 产生某类产物 |
-| `consumes` | Skill 消费某类产物 |
-| `contains` | 粗粒度 Skill 包含细粒度 Skill |
-| `has_skill_tag` | Skill 具备某类技能标签 |
-| `has_data_tag` | Skill 关联某类数据域 |
-| `similar_to` | Skill 语义相似 |
-| `substitute_for` | Skill 可作为替代 |
+| `can_feed` | source 输出可满足 target 输入 |
+| `similar_to` | 能力语义相近（语义无向，存储为双向边） |
+| `substitute_for` | source 可替代 target（有向边） |
+
+说明：
+
+1. `artifact/tag` 在 v1 不作为图节点持久化，仅作为建边证据、索引或排序上下文。
+2. 在线可执行路径只走 `can_feed`；`similar_to/substitute_for` 只用于排序阶段的候选替换，不用于扩展新路径。
 
 ### 6.7 接口边界视图
 
@@ -348,8 +345,8 @@ flowchart LR
 2. 图构建阶段生成 Skill 图和索引。
 3. 在线阶段将用户任务解释为需要 `web_search`、`summarization`、`slide_generation` 和 `pptx` 输出。
 4. 编排与检索模块召回能产出 `pptx` 的 Skill，并根据输入缺口继续召回上游 Skill。
-5. 裁剪与排序模块去掉输入不闭合、冗余或成本过高的候选计划。
-6. 执行模块接收排名最高的 ExecutionPlan，逐步执行并记录中间产物。
+5. 排序模块先做约束校验，再在 slot 内执行候选替换（`substitute_for` 优先于 `similar_to`），每次替换后做整链 I/O 闭合校验，失败即回退。
+6. 排序默认由 LLM 完成，若失败则回退到确定性排序；执行模块接收排名最高的 ExecutionPlan 并记录 trace。
 
 ## 7. 设计原则
 
@@ -359,6 +356,8 @@ flowchart LR
 4. 计划和执行分离。
 5. UI/API 与核心功能解耦。
 6. 所有跨模块数据都应结构化、可序列化、可诊断。
+7. 在线参数采用分层覆盖：`request > runtime service config > manifest defaults`。
+8. 离线索引与在线检索共享同一词项规范化层，保证中英混合场景的一致匹配。
 
 ## 8. 当前实现与目标结构的关系
 

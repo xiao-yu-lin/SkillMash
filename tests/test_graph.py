@@ -252,6 +252,36 @@ def test_graph_builder_adds_deterministic_exact_io_edges() -> None:
     ) in edge_types
 
 
+def test_graph_builder_mirrors_similar_edges_but_keeps_substitute_directional() -> None:
+    class RelationMatcher:
+        def match(self, registry, candidates):
+            return [
+                LLMMatch(
+                    source_id="web_search",
+                    target_id="summarize_text",
+                    relation_type="similar_to",
+                    confidence=0.7,
+                    accepted=True,
+                ),
+                LLMMatch(
+                    source_id="web_search",
+                    target_id="summarize_text",
+                    relation_type="substitute_for",
+                    confidence=0.8,
+                    accepted=True,
+                ),
+            ]
+
+    result = GraphBuilder(matcher=RelationMatcher()).build(
+        [_web_search_skill(), _summarize_skill()]
+    )
+    edge_types = {(edge.source, edge.target, edge.type) for edge in result.graph.edges}
+    assert ("skill:web_search", "skill:summarize_text", "similar_to") in edge_types
+    assert ("skill:summarize_text", "skill:web_search", "similar_to") in edge_types
+    assert ("skill:web_search", "skill:summarize_text", "substitute_for") in edge_types
+    assert ("skill:summarize_text", "skill:web_search", "substitute_for") not in edge_types
+
+
 def test_graph_builder_pipeline_writes_expected_artifacts(tmp_path: Path) -> None:
     result = GraphBuilder(matcher=AcceptingMatcher()).build(
         [_web_search_skill(), _summarize_skill()]

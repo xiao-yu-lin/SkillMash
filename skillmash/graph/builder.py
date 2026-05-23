@@ -46,21 +46,31 @@ class SkillGraphBuilder:
         for match in llm_matches:
             if not match.accepted:
                 continue
-            self._add_edge(
-                edges,
-                GraphEdge(
-                    source=f"skill:{match.source_id}",
-                    target=f"skill:{match.target_id}",
-                    type=match.relation_type,
-                    confidence=match.confidence,
-                    method=match.method,
-                    evidence={
-                        "candidate_id": match.candidate_id,
-                        "reasons": match.reasons,
-                        "supporting_fields": match.supporting_fields,
-                    },
-                ),
+            edge = GraphEdge(
+                source=f"skill:{match.source_id}",
+                target=f"skill:{match.target_id}",
+                type=match.relation_type,
+                confidence=match.confidence,
+                method=match.method,
+                evidence={
+                    "candidate_id": match.candidate_id,
+                    "reasons": match.reasons,
+                    "supporting_fields": match.supporting_fields,
+                },
             )
+            self._add_edge(edges, edge)
+            if match.relation_type == "similar_to":
+                self._add_edge(
+                    edges,
+                    GraphEdge(
+                        source=f"skill:{match.target_id}",
+                        target=f"skill:{match.source_id}",
+                        type=match.relation_type,
+                        confidence=match.confidence,
+                        method=match.method,
+                        evidence=edge.evidence,
+                    ),
+                )
 
         return SkillGraph(
             nodes=[nodes[node_id] for node_id in sorted(nodes)],

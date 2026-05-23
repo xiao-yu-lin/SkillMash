@@ -212,6 +212,19 @@ class BuildManifest:
             "substitute_for": 0.0,
         }
     )
+    planning_defaults: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "min_edge_confidence": 0.7,
+            "max_depth": 4,
+            "max_plans": 20,
+            "max_branch": 8,
+            "top_m": 12,
+            "top_k": 3,
+            "include_candidates": True,
+            "relation_feedback_path": ".skillmash/runtime/relation_feedback.jsonl",
+            "relation_feedback_window_days": 30,
+        }
+    )
     llm: Dict[str, Any] = field(default_factory=dict)
     created_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
@@ -222,6 +235,7 @@ class BuildManifest:
             "schema_version": self.schema_version,
             "artifacts": self.artifacts,
             "thresholds": self.thresholds,
+            "planning_defaults": self.planning_defaults,
             "llm": self.llm,
             "created_at": self.created_at,
         }

@@ -16,6 +16,7 @@ from skillmash.orchestration.planning.models import (
     GroundedQuery,
     GroundingClient,
     OrchestrationPlan,
+    PlanningConfig,
     PlanStep,
 )
 from skillmash.orchestration.planning.orchestrator import SkillOrchestrator
@@ -28,6 +29,7 @@ __all__ = [
     "GroundedQuery",
     "GroundingClient",
     "OrchestrationPlan",
+    "PlanningConfig",
     "PlanStep",
     "SkillOrchestrator",
     "DEFAULT_STOP_TERMS",

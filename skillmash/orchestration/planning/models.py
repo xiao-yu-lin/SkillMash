@@ -115,6 +115,25 @@ class GroundingClient(Protocol):
 
 
 @dataclass(frozen=True)
+class PlanningConfig:
+    """Runtime planning and ranking knobs.
+
+    Override precedence should be applied by callers as:
+    request > runtime service config > manifest defaults.
+    """
+
+    min_edge_confidence: float = 0.7
+    max_depth: int = 4
+    max_plans: int = 20
+    max_branch: int = 8
+    top_m: int = 12
+    top_k: int = 3
+    include_candidates: bool = True
+    relation_feedback_path: str = ".skillmash/runtime/relation_feedback.jsonl"
+    relation_feedback_window_days: int = 30
+
+
+@dataclass(frozen=True)
 class SearchState:
     """Internal forward-search state."""
 

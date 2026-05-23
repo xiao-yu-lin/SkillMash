@@ -18,7 +18,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from skillmash.orchestration import SkillOrchestrator, load_build_artifacts  # noqa: E402
-from skillmash.reranking import PlanReranker  # noqa: E402
 from skillmash.representation import LLMConfig  # noqa: E402
 
 
@@ -54,13 +53,19 @@ def main() -> None:
         "--max_plans",
         type=int,
         default=20,
-        help="Maximum number of candidate plans to generate before reranking.",
+        help="Maximum number of candidate plans to generate before ranking.",
+    )
+    parser.add_argument(
+        "--top_m",
+        type=int,
+        default=12,
+        help="Maximum candidate plans sent to the LLM ranker.",
     )
     parser.add_argument(
         "--top_k",
         type=int,
         default=3,
-        help="Number of LLM-ranked recommended candidate plans to return.",
+        help="Number of recommended candidate plans to return.",
     )
     parser.add_argument(
         "--max_branch",
@@ -90,9 +95,11 @@ def main() -> None:
         max_depth=args.max_depth,
         max_plans=args.max_plans,
         max_branch=args.max_branch,
+        top_m=args.top_m,
+        top_k=args.top_k,
+        include_candidates=args.show_candidates,
     )
     result = planner.plan(query)
-    result = PlanReranker(llm_config=llm_config).rerank(result, top_k=args.top_k)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:

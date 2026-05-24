@@ -126,9 +126,11 @@ class PlanningConfig:
     max_depth: int = 4
     max_plans: int = 20
     max_branch: int = 8
+    max_entry_skills: int = 40
     top_m: int = 12
     top_k: int = 3
     include_candidates: bool = True
+    conservative_reject: bool = True
     relation_feedback_path: str = ".skillmash/runtime/relation_feedback.jsonl"
     relation_feedback_window_days: int = 30
 

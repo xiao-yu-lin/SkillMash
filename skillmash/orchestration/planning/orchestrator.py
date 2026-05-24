@@ -16,7 +16,11 @@ from skillmash.orchestration.planning.search import (
     plan_stages,
     search_plans,
 )
+from skillmash.orchestration.planning.slot_grouping import build_slot_groups
 from skillmash.orchestration.planning.utils import clamp
+from skillmash.orchestration.strategy import ReliabilityFirstStrategy
+from skillmash.orchestration.strategy.interfaces import PruneContext
+from skillmash.orchestration.validation import default_policy, hard_filter_plans
 from skillmash.reranking import PlanReranker
 from skillmash.representation.llm import LLMConfig, create_llm_client
 
@@ -50,9 +54,11 @@ class SkillOrchestrator:
         max_depth: int | None = None,
         max_plans: int | None = None,
         max_branch: int | None = None,
+        max_entry_skills: int | None = None,
         top_m: int | None = None,
         top_k: int | None = None,
         include_candidates: bool | None = None,
+        conservative_reject: bool | None = None,
     ) -> None:
         self.artifacts = artifacts
         self.manifest_defaults = _planning_defaults_from_manifest(artifacts.manifest)
@@ -63,15 +69,18 @@ class SkillOrchestrator:
             max_depth=max_depth,
             max_plans=max_plans,
             max_branch=max_branch,
+            max_entry_skills=max_entry_skills,
             top_m=top_m,
             top_k=top_k,
             include_candidates=include_candidates,
+            conservative_reject=conservative_reject,
         )
 
         self.min_edge_confidence = clamp(self.config.min_edge_confidence)
         self.max_depth = max(1, self.config.max_depth)
         self.max_plans = max(1, self.config.max_plans)
         self.max_branch = max(1, self.config.max_branch)
+        self.max_entry_skills = max(1, self.config.max_entry_skills)
         self.skill_by_id = artifacts.skill_by_id
         self.llm_config = llm_config
         if llm_client is not None:
@@ -108,9 +117,15 @@ class SkillOrchestrator:
             max_depth=planning_config.max_depth if planning_config else None,
             max_plans=planning_config.max_plans if planning_config else None,
             max_branch=planning_config.max_branch if planning_config else None,
+            max_entry_skills=planning_config.max_entry_skills
+            if planning_config
+            else None,
             top_m=planning_config.top_m if planning_config else None,
             top_k=planning_config.top_k if planning_config else None,
             include_candidates=planning_config.include_candidates
+            if planning_config
+            else None,
+            conservative_reject=planning_config.conservative_reject
             if planning_config
             else None,
         )
@@ -131,6 +146,7 @@ class SkillOrchestrator:
             max_depth=max(1, config.max_depth),
             max_plans=max(1, config.max_plans),
             max_branch=max(1, config.max_branch),
+            max_entry_skills=max(1, config.max_entry_skills),
         )
         candidate_plans = sorted(
             (plan.to_dict() for plan in plans),
@@ -143,28 +159,84 @@ class SkillOrchestrator:
                 -float(plan.get("edge_confidence") or 0.0),
             ),
         )[: max(1, config.max_plans)]
+
+        candidate_plans = build_slot_groups(candidate_plans, self.all_relation_edges)
         candidate_plans = [
             _optimize_plan_slots(
                 plan,
                 skill_by_id=self.skill_by_id,
                 graph_edges=self.all_relation_edges,
+                can_feed_edges=self.all_can_feed_edges,
                 grounded=grounded,
                 feedback_path=config.relation_feedback_path,
+                min_edge_confidence=clamp(config.min_edge_confidence),
             )
             for plan in candidate_plans
         ]
+
+        policy = default_policy()
+        policy["min_edge_confidence"] = clamp(config.min_edge_confidence)
+        validated_plans, fail_counts, plan_fail_reasons = hard_filter_plans(
+            candidate_plans,
+            policy=policy,
+        )
+
+        if not validated_plans and config.conservative_reject:
+            return {
+                "query": query,
+                "build_dir": str(self.artifacts.build_dir),
+                "grounded_query": grounded.to_dict(),
+                "plans": candidate_plans if config.include_candidates else [],
+                "recommended_plans": [],
+                "ranking_mode": "conservative_reject",
+                "decision": {
+                    "mode": "conservative_reject",
+                    "strategy": "reliability_first",
+                    "fail_code_counts": fail_counts,
+                    "plan_fail_reasons": plan_fail_reasons,
+                    "validated_count": 0,
+                },
+            }
+
+        strategy = ReliabilityFirstStrategy()
+        context = PruneContext(
+            query=query,
+            grounded_query=grounded.to_dict(),
+            policy=policy,
+            runtime_constraints={},
+        )
+        ranked_validated = sorted(
+            validated_plans,
+            key=lambda plan: (
+                -strategy.rank_score(plan, context),
+                len(plan.get("steps") or []),
+                -float(plan.get("goal_score") or 0.0),
+            ),
+        )[: max(1, config.max_plans)]
+
+        for plan in ranked_validated:
+            plan["strategy_score"] = round(strategy.rank_score(plan, context), 6)
+
         result = {
             "query": query,
             "build_dir": str(self.artifacts.build_dir),
             "grounded_query": grounded.to_dict(),
-            "plans": candidate_plans,
+            "plans": ranked_validated,
         }
-        return self.ranker.rerank(
+        reranked = self.ranker.rerank(
             result,
             top_k=max(1, config.top_k),
             top_m=max(1, config.top_m),
             include_candidates=bool(config.include_candidates),
         )
+        reranked["decision"] = {
+            "mode": "validated",
+            "strategy": strategy.name,
+            "validated_count": len(ranked_validated),
+            "candidate_count": len(candidate_plans),
+            "fail_code_counts": fail_counts,
+        }
+        return reranked
 
     def ground_query(self, query: str) -> GroundedQuery:
         return ground_query(
@@ -181,9 +253,11 @@ def _resolve_config(
     max_depth: int | None,
     max_plans: int | None,
     max_branch: int | None,
+    max_entry_skills: int | None,
     top_m: int | None,
     top_k: int | None,
     include_candidates: bool | None,
+    conservative_reject: bool | None,
 ) -> PlanningConfig:
     base_config = base or PlanningConfig()
     return PlanningConfig(
@@ -197,12 +271,20 @@ def _resolve_config(
         max_branch=int(max_branch)
         if max_branch is not None
         else base_config.max_branch,
+        max_entry_skills=int(max_entry_skills)
+        if max_entry_skills is not None
+        else base_config.max_entry_skills,
         top_m=int(top_m) if top_m is not None else base_config.top_m,
         top_k=int(top_k) if top_k is not None else base_config.top_k,
         include_candidates=(
             bool(include_candidates)
             if include_candidates is not None
             else base_config.include_candidates
+        ),
+        conservative_reject=(
+            bool(conservative_reject)
+            if conservative_reject is not None
+            else base_config.conservative_reject
         ),
         relation_feedback_path=base_config.relation_feedback_path,
         relation_feedback_window_days=base_config.relation_feedback_window_days,
@@ -220,10 +302,16 @@ def _planning_defaults_from_manifest(manifest: dict[str, Any]) -> PlanningConfig
         max_depth=int(defaults.get("max_depth", PlanningConfig.max_depth)),
         max_plans=int(defaults.get("max_plans", PlanningConfig.max_plans)),
         max_branch=int(defaults.get("max_branch", PlanningConfig.max_branch)),
+        max_entry_skills=int(
+            defaults.get("max_entry_skills", PlanningConfig.max_entry_skills)
+        ),
         top_m=int(defaults.get("top_m", PlanningConfig.top_m)),
         top_k=int(defaults.get("top_k", PlanningConfig.top_k)),
         include_candidates=bool(
             defaults.get("include_candidates", PlanningConfig.include_candidates)
+        ),
+        conservative_reject=bool(
+            defaults.get("conservative_reject", PlanningConfig.conservative_reject)
         ),
         relation_feedback_path=str(
             defaults.get(
@@ -244,16 +332,16 @@ def _optimize_plan_slots(
     *,
     skill_by_id: dict[str, dict[str, Any]],
     graph_edges: list[dict[str, Any]],
+    can_feed_edges: list[dict[str, Any]],
     grounded: GroundedQuery,
     feedback_path: str,
+    min_edge_confidence: float,
 ) -> dict[str, Any]:
     steps = [dict(step) for step in plan.get("steps", [])]
     if not steps:
         return plan
     relation_views = _relation_views(graph_edges)
-    available = {
-        artifact.key for artifact in grounded.available_artifacts
-    }
+    available = {artifact.key for artifact in grounded.available_artifacts}
     selected_ids = [str(step.get("skill_id") or "") for step in steps]
     slot_candidates: list[dict[str, Any]] = []
     replacement_log: list[str] = []
@@ -311,6 +399,20 @@ def _optimize_plan_slots(
                     reason_code="slot_no_viable_substitute",
                 )
                 continue
+            if not _plan_chain_has_explicit_edges(
+                tentative_ids,
+                can_feed_edges=can_feed_edges,
+                min_edge_confidence=min_edge_confidence,
+            ):
+                _record_relation_feedback(
+                    feedback_path,
+                    source_skill=candidate_id,
+                    target_skill=original_id,
+                    relation_type=relation_type,
+                    slot_io_signature=contract["io_signature"],
+                    reason_code="slot_no_explicit_adjacency",
+                )
+                continue
             selected_ids[index] = candidate_id
             replacement_log.append(
                 f"slot {index + 1}: {original_id} -> {candidate_id} ({relation_type})"
@@ -323,7 +425,6 @@ def _optimize_plan_slots(
         plan.get("can_feed_edges", []),
         old_ids=[str(step.get("skill_id") or "") for step in steps],
         new_ids=selected_ids,
-        skill_by_id=skill_by_id,
     )
     updated = dict(plan)
     updated["steps"] = remapped_steps
@@ -334,10 +435,7 @@ def _optimize_plan_slots(
     updated["status"] = "ready" if not missing_inputs else "needs_input"
     updated["can_feed_edges"] = remapped_edges
     updated["stages"] = plan_stages(
-        [
-            replace_step_for_stage(step)
-            for step in remapped_steps
-        ],
+        [replace_step_for_stage(step) for step in remapped_steps],
         remapped_edges,
     )
     return updated
@@ -464,6 +562,41 @@ def _plan_chain_closed(
     return True
 
 
+def _plan_chain_has_explicit_edges(
+    skill_ids: list[str],
+    *,
+    can_feed_edges: list[dict[str, Any]],
+    min_edge_confidence: float,
+) -> bool:
+    if len(skill_ids) <= 1:
+        return True
+    for source_id, target_id in zip(skill_ids, skill_ids[1:]):
+        if not _has_explicit_adjacency(
+            source_id,
+            target_id,
+            can_feed_edges=can_feed_edges,
+            min_edge_confidence=min_edge_confidence,
+        ):
+            return False
+    return True
+
+
+def _has_explicit_adjacency(
+    source_id: str,
+    target_id: str,
+    *,
+    can_feed_edges: list[dict[str, Any]],
+    min_edge_confidence: float,
+) -> bool:
+    for edge in can_feed_edges:
+        source = _edge_skill_id(edge.get("source"))
+        target = _edge_skill_id(edge.get("target"))
+        confidence = float(edge.get("confidence") or 0.0)
+        if source == source_id and target == target_id and confidence >= min_edge_confidence:
+            return True
+    return False
+
+
 def _step_from_skill_id(skill_by_id: dict[str, dict[str, Any]], skill_id_: str) -> dict[str, Any]:
     skill = skill_by_id.get(skill_id_, {})
     return {
@@ -517,7 +650,6 @@ def _remap_plan_edges(
     *,
     old_ids: list[str],
     new_ids: list[str],
-    skill_by_id: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
     mapping = dict(zip(old_ids, new_ids))
     remapped = []
@@ -528,32 +660,7 @@ def _remap_plan_edges(
         item["source_id"] = source
         item["target_id"] = target
         remapped.append(item)
-    if remapped:
-        return remapped
-    generated = []
-    for index in range(len(new_ids) - 1):
-        source = new_ids[index]
-        target = new_ids[index + 1]
-        generated.append(
-            {
-                "source_id": source,
-                "target_id": target,
-                "confidence": 1.0,
-                "method": "slot_replacement_chain",
-                "source_outputs": [
-                    item.get("name")
-                    for item in skill_by_id.get(source, {}).get("outputs", [])
-                    if item.get("name")
-                ][:3],
-                "target_inputs": [
-                    item.get("name")
-                    for item in skill_by_id.get(target, {}).get("inputs", [])
-                    if item.get("name")
-                ][:3],
-                "reasons": ["derived edge for replacement chain"],
-            }
-        )
-    return generated
+    return remapped
 
 
 def _record_relation_feedback(

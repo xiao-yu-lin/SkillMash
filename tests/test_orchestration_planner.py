@@ -96,6 +96,13 @@ class IncompatibleSubstituteMatcher:
         ]
 
 
+def test_planning_config_exposes_entry_width_and_conservative_flags() -> None:
+    cfg = PlanningConfig()
+    assert hasattr(cfg, "max_entry_skills")
+    assert hasattr(cfg, "conservative_reject")
+    assert cfg.conservative_reject is True
+
+
 def test_orchestrator_uses_user_artifacts_as_entry(tmp_path: Path) -> None:
     result = GraphBuilder(matcher=ExactMatcher()).build(
         [_make_api_skill(), _review_api_skill()]
@@ -259,6 +266,95 @@ def test_orchestrator_records_feedback_for_incompatible_substitute(tmp_path: Pat
     assert feedback_path.exists()
     lines = feedback_path.read_text(encoding="utf-8").splitlines()
     assert any("slot_incompatible_signature" in line for line in lines)
+
+
+def test_orchestrator_returns_conservative_rejection_when_no_validated_plan(
+    tmp_path: Path,
+) -> None:
+    result = GraphBuilder(matcher=ExactMatcher()).build([_review_api_skill()])
+    write_graph_build_result(result, tmp_path)
+
+    planner = SkillOrchestrator(
+        load_build_artifacts(tmp_path),
+        llm_client=FakeGroundingClient(
+            {
+                "available_artifacts": [],
+                "goal_terms": ["review", "api", "spec"],
+            }
+        ),
+        planning_config=PlanningConfig(conservative_reject=True),
+        max_plans=5,
+    )
+    plan = planner.plan("Please review my api specification")
+
+    assert plan["recommended_plans"] == []
+    assert plan["ranking_mode"] == "conservative_reject"
+    assert plan["decision"]["mode"] == "conservative_reject"
+    assert plan["decision"]["fail_code_counts"]
+
+
+def test_orchestrator_decision_trace_has_mode_and_fail_aggregation(
+    tmp_path: Path,
+) -> None:
+    result = GraphBuilder(matcher=ExactMatcher()).build([_review_api_skill()])
+    write_graph_build_result(result, tmp_path)
+
+    planner = SkillOrchestrator(
+        load_build_artifacts(tmp_path),
+        llm_client=FakeGroundingClient(
+            {
+                "available_artifacts": [],
+                "goal_terms": ["review", "api", "spec"],
+            }
+        ),
+        planning_config=PlanningConfig(conservative_reject=True),
+    )
+    response = planner.plan("review api")
+    assert "decision" in response
+    assert "mode" in response["decision"]
+    assert "fail_code_counts" in response["decision"]
+
+
+def test_slot_replacement_requires_explicit_can_feed_adjacency(tmp_path: Path) -> None:
+    result = GraphBuilder(matcher=SubstituteMatcher()).build(
+        [_make_api_skill(), _review_api_skill(), _review_api_pro_skill()]
+    )
+    write_graph_build_result(result, tmp_path)
+    planner = SkillOrchestrator(
+        load_build_artifacts(tmp_path),
+        llm_client=FakeGroundingClient(
+            {
+                "available_artifacts": [],
+                "goal_terms": ["generate", "review", "api", "spec"],
+            }
+        ),
+    )
+    response = planner.plan("Generate an api spec and review it")
+
+    for candidate in response.get("plans", []):
+        assert all(
+            edge.get("method") != "slot_replacement_chain"
+            for edge in candidate.get("can_feed_edges", [])
+        )
+
+
+def test_reliability_first_records_strategy_in_decision(tmp_path: Path) -> None:
+    result = GraphBuilder(matcher=BranchingMatcher()).build(
+        [_make_api_skill(), _review_api_skill(), _deploy_api_skill()]
+    )
+    write_graph_build_result(result, tmp_path)
+    planner = SkillOrchestrator(
+        load_build_artifacts(tmp_path),
+        llm_client=FakeGroundingClient(
+            {
+                "available_artifacts": [],
+                "goal_terms": ["generate", "review", "deploy", "api", "spec"],
+            }
+        ),
+    )
+
+    response = planner.plan("Generate and review and deploy api")
+    assert response["decision"]["strategy"] == "reliability_first"
 
 
 def _make_api_skill() -> SkillRepresentation:

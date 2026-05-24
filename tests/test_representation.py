@@ -660,6 +660,18 @@ def test_representation_extractor_uses_batched_schema_extractor(tmp_path: Path) 
     ]
 
 
+def test_docs_and_example_reference_llm_env_names() -> None:
+    readme = Path("README.md").read_text(encoding="utf-8")
+    example = Path("examples/representation_extraction_demo.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "LLM_MODEL" in readme
+    assert "LLM_API_KEY" in readme
+    assert "LLM_MODEL" in example
+    assert "LLM_API_KEY" in example
+
+
 def _manifest(tmp_path: Path):
     skill_dir = tmp_path / "aris-arxiv"
     skill_dir.mkdir()

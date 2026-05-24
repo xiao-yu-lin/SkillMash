@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from skillmash.graph import (
@@ -12,6 +13,7 @@ from skillmash.graph import (
     validate_llm_matches,
     write_graph_build_result,
 )
+from skillmash.orchestration import load_build_artifacts
 from skillmash.representation import ArtifactSpec, ParameterSpec, SkillRepresentation
 
 
@@ -51,6 +53,47 @@ class AcceptingMatcher:
                 )
             )
         return matches
+
+
+def test_load_build_artifacts_prefers_manifest_vocab_paths(tmp_path: Path) -> None:
+    repre_dir = tmp_path / "repre"
+    repre_dir.mkdir(parents=True)
+
+    manifest = {
+        "schema_version": "skillmash-build-v1",
+        "artifacts": {
+            "skills": "skills.json",
+            "graph": "skill_graph.json",
+            "index": "skill_index.json",
+            "io_name_vocab": "repre/io_name_vocab.json",
+            "task_vocab": "repre/task_vocab.json",
+        },
+    }
+    (tmp_path / "build_manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    (tmp_path / "skills.json").write_text(
+        json.dumps({"skills": []}), encoding="utf-8"
+    )
+    (tmp_path / "skill_graph.json").write_text(
+        json.dumps({"nodes": [], "edges": []}), encoding="utf-8"
+    )
+    (tmp_path / "skill_index.json").write_text(
+        json.dumps({"by_output": {}, "by_input": {}, "by_task": {}, "by_data_type": {}, "neighbors": {}, "upstream_by_input": {}, "downstream_by_output": {}, "by_text_term": {}}),
+        encoding="utf-8",
+    )
+    (repre_dir / "io_name_vocab.json").write_text(
+        json.dumps({"version": "io-name-vocab-v1", "terms": []}),
+        encoding="utf-8",
+    )
+    (repre_dir / "task_vocab.json").write_text(
+        json.dumps({"version": "task-vocab-v1", "terms": []}),
+        encoding="utf-8",
+    )
+
+    artifacts = load_build_artifacts(tmp_path)
+    assert artifacts.io_name_vocab is not None
+    assert artifacts.task_vocab is not None
 
 
 def test_candidate_generator_finds_exact_io_can_feed_candidate() -> None:

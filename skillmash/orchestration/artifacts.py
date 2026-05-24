@@ -34,15 +34,16 @@ def load_build_artifacts(build_dir: str | Path) -> BuildArtifacts:
     skills_payload = _read_json(root / artifacts.get("skills", "skills.json"))
     graph = _read_json(root / artifacts.get("graph", "skill_graph.json"))
     index = _read_json(root / artifacts.get("index", "skill_index.json"))
-    representation_dir = _guess_representation_dir(root)
+    io_name_vocab_path = root / artifacts.get("io_name_vocab", "io_name_vocab.json")
+    task_vocab_path = root / artifacts.get("task_vocab", "task_vocab.json")
     return BuildArtifacts(
         build_dir=root,
         manifest=manifest,
         skills=skills_payload.get("skills", []),
         graph=graph,
         index=index,
-        io_name_vocab=_read_optional_json(representation_dir / "io_name_vocab.json"),
-        task_vocab=_read_optional_json(representation_dir / "task_vocab.json"),
+        io_name_vocab=_read_optional_json(io_name_vocab_path),
+        task_vocab=_read_optional_json(task_vocab_path),
     )
 
 
@@ -57,10 +58,3 @@ def _read_optional_json(path: Path) -> dict[str, Any] | None:
         return None
     return json.loads(path.read_text(encoding="utf-8"))
 
-
-def _guess_representation_dir(build_dir: Path) -> Path:
-    output_dir = build_dir.parent
-    repre_dir = output_dir / "repre"
-    if repre_dir.exists():
-        return repre_dir
-    return build_dir

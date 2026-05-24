@@ -203,6 +203,8 @@ class BuildManifest:
             "index": "skill_index.json",
             "llm_matches": "llm_matches.json",
             "diagnostics": "diagnostics.json",
+            "io_name_vocab": "io_name_vocab.json",
+            "task_vocab": "task_vocab.json",
         }
     )
     thresholds: Dict[str, float] = field(
@@ -218,9 +220,11 @@ class BuildManifest:
             "max_depth": 4,
             "max_plans": 20,
             "max_branch": 8,
+            "max_entry_skills": 40,
             "top_m": 12,
             "top_k": 3,
             "include_candidates": True,
+            "conservative_reject": True,
             "relation_feedback_path": ".skillmash/runtime/relation_feedback.jsonl",
             "relation_feedback_window_days": 30,
         }

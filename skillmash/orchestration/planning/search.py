@@ -26,13 +26,14 @@ def search_plans(
     max_depth: int,
     max_plans: int,
     max_branch: int,
+    max_entry_skills: int,
 ) -> list[OrchestrationPlan]:
     initial_available = frozenset(artifact.key for artifact in grounded.available_artifacts)
     entry_ids = entry_skill_ids(
         artifacts=artifacts,
         available=initial_available,
         goal_terms=grounded.goal_terms,
-        max_branch=max_branch,
+        max_entry_skills=max_entry_skills,
     )
     queue = deque(
         SearchState(skill_ids=(skill_id_,), available=initial_available, edges=())
@@ -105,7 +106,7 @@ def entry_skill_ids(
     artifacts: BuildArtifacts,
     available: frozenset[tuple[str, str]],
     goal_terms: set[str],
-    max_branch: int,
+    max_entry_skills: int,
 ) -> list[str]:
     scored: list[tuple[float, str]] = []
     for skill in artifacts.skills:
@@ -120,7 +121,7 @@ def entry_skill_ids(
     return [
         current_skill_id
         for _, current_skill_id in sorted(scored, key=lambda item: (-item[0], item[1]))
-    ][:max_branch]
+    ][:max_entry_skills]
 
 
 def next_skill_ids(

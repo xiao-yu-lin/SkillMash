@@ -39,21 +39,21 @@ The first version prioritizes:
 Create a `.env` file from [.env.example](.env.example):
 
 ```env
-OPENAI_API_KEY=your_api_key_here
-OPENAI_MODEL=gpt-4.1-mini
-OPENAI_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=your_api_key_here
+LLM_MODEL=gpt-4.1-mini
+LLM_BASE_URL=https://api.openai.com/v1
 ```
 
-`OPENAI_API_KEY` and `OPENAI_MODEL` are required. `OPENAI_BASE_URL` can point to any OpenAI-compatible provider.
+`LLM_API_KEY` and `LLM_MODEL` are required. `LLM_BASE_URL` can point to any OpenAI-compatible provider.
 
 Optional overrides:
 
 ```env
-SKILLMASH_LLM_API_KEY=your_api_key_here
-SKILLMASH_LLM_MODEL=gpt-4.1-mini
-SKILLMASH_LLM_BASE_URL=https://api.openai.com/v1
-SKILLMASH_LLM_TEMPERATURE=0
-SKILLMASH_LLM_TIMEOUT_SECONDS=60
+LLM_API_KEY=your_api_key_here
+LLM_MODEL=gpt-4.1-mini
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_TEMPERATURE=0
+LLM_TIMEOUT_SECONDS=60
 ```
 
 ### vLLM Offline Mode

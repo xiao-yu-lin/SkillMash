@@ -630,17 +630,19 @@
           <select id="orchestrationTopK" aria-label="推荐计划数量">
             <option value="1">1</option>
             <option value="2">2</option>
-            <option value="3" selected>3</option>
-            <option value="5">5</option>
+            <option value="3">3</option>
+            <option value="5" selected>5</option>
           </select>
         </div>
         <div class="row">
           <label class="check">Top-M</label>
           <select id="orchestrationTopM" aria-label="送入重排的候选计划数">
             <option value="8">8</option>
-            <option value="12" selected>12</option>
+            <option value="12">12</option>
             <option value="20">20</option>
             <option value="30">30</option>
+            <option value="40" selected>40</option>
+            <option value="60">60</option>
           </select>
         </div>
         <div class="row">
@@ -1341,7 +1343,7 @@
             min_edge_confidence: minEdgeConfidence,
             allow_similar_slot_substitute: els.orchestrationAllowSimilar.checked,
             show_candidates: els.orchestrationShowCandidates.checked,
-            build_dir: getOutputDirFromUrl() || "OUTPUT/build"
+            build_dir: getOutputDirFromUrl() || "OUTPUT/v4/graph"
           })
         });
 

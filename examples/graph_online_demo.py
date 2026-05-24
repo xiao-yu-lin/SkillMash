@@ -1,8 +1,8 @@
 """Run Skill orchestration from offline graph build artifacts.
 
 Usage:
-    python examples/graph_online_demo.py --build_dir OUTPUT/build
-    python examples/graph_online_demo.py --build_dir OUTPUT/build --query "I have api_spec and want a security review"
+    python examples/graph_online_demo.py --build_dir OUTPUT/v4/graph
+    python examples/graph_online_demo.py --build_dir OUTPUT/v4/graph --query "I have api_spec and want a security review"
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from skillmash.orchestration import SkillOrchestrator, load_build_artifacts  # n
 from skillmash.representation import LLMConfig  # noqa: E402
 
 
-DEFAULT_BUILD_DIR = REPO_ROOT / "OUTPUT" / "build"
+DEFAULT_BUILD_DIR = REPO_ROOT / "OUTPUT" / "v4" / "graph"
 
 
 def main() -> None:
@@ -32,7 +32,7 @@ def main() -> None:
     parser.add_argument(
         "--build_dir",
         default=str(DEFAULT_BUILD_DIR),
-        help="Directory containing graph build artifacts. Defaults to OUTPUT/build.",
+        help="Directory containing graph build artifacts. Defaults to OUTPUT/v4/graph.",
     )
     parser.add_argument(
         "--query",
@@ -47,31 +47,31 @@ def main() -> None:
     parser.add_argument(
         "--max_depth",
         type=int,
-        default=4,
+        default=10,
         help="Maximum Skill steps in each candidate plan.",
     )
     parser.add_argument(
         "--max_plans",
         type=int,
-        default=20,
+        default=60,
         help="Maximum number of candidate plans to generate before ranking.",
     )
     parser.add_argument(
         "--top_m",
         type=int,
-        default=12,
+        default=40,
         help="Maximum candidate plans sent to the LLM ranker.",
     )
     parser.add_argument(
         "--top_k",
         type=int,
-        default=3,
+        default=5,
         help="Number of recommended candidate plans to return.",
     )
     parser.add_argument(
         "--max_branch",
         type=int,
-        default=8,
+        default=20,
         help="Maximum expansion branch count per search state.",
     )
     parser.add_argument(

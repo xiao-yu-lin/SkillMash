@@ -33,14 +33,14 @@ class QuietHandler(SimpleHTTPRequestHandler):
             request = self._read_json_body()
             query = str(request.get("query") or "").strip()
             min_edge_confidence = float(request.get("min_edge_confidence") or 0.7)
-            top_m = int(request.get("top_m") or 12)
+            top_m = int(request.get("top_m") or 40)
             show_candidates = bool(request.get("show_candidates"))
             allow_similar = bool(request.get("allow_similar_slot_substitute"))
             _log(
                 "orchestrate request started "
-                f"query_len={len(query)} top_k={request.get('top_k', 3)} "
-                f"max_plans={request.get('max_plans', 20)} max_depth={request.get('max_depth', 4)} "
-                f"max_branch={request.get('max_branch', 8)} "
+                f"query_len={len(query)} top_k={request.get('top_k', 5)} "
+                f"max_plans={request.get('max_plans', 60)} max_depth={request.get('max_depth', 10)} "
+                f"max_branch={request.get('max_branch', 20)} "
                 f"min_edge_confidence={min_edge_confidence} top_m={top_m} "
                 f"show_candidates={show_candidates} "
                 f"allow_similar_slot_substitute={allow_similar}"
@@ -86,20 +86,20 @@ class QuietHandler(SimpleHTTPRequestHandler):
             str(
                 request.get("build_dir")
                 or self.build_dir
-                or "OUTPUT/build"
+                or "OUTPUT/v4/graph"
             ),
         )
         query = str(request.get("query") or "").strip()
         if not query:
             raise ValueError("query is required")
         min_edge_confidence = max(0.0, min(1.0, float(request.get("min_edge_confidence") or 0.7)))
-        top_m = max(1, min(80, int(request.get("top_m") or 12)))
+        top_m = max(1, min(80, int(request.get("top_m") or 40)))
         show_candidates = bool(request.get("show_candidates"))
         allow_similar = bool(request.get("allow_similar_slot_substitute"))
-        top_k = max(1, min(10, int(request.get("top_k") or 3)))
-        max_plans = max(1, min(80, int(request.get("max_plans") or 20)))
-        max_depth = max(1, min(8, int(request.get("max_depth") or 4)))
-        max_branch = max(1, min(20, int(request.get("max_branch") or 8)))
+        top_k = max(1, min(10, int(request.get("top_k") or 5)))
+        max_plans = max(1, min(80, int(request.get("max_plans") or 60)))
+        max_depth = max(1, min(20, int(request.get("max_depth") or 10)))
+        max_branch = max(1, min(20, int(request.get("max_branch") or 20)))
 
         import sys
 

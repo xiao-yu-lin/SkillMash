@@ -61,6 +61,14 @@ def _sample_planning_result() -> dict:
                 "edge_confidence": 0.8,
                 "plan_classification": "structurally_valid_but_incomplete",
                 "connectivity_trace": ["can_feed", "aggregates"],
+                "can_feed_edges": [
+                    {
+                        "source_id": "wisedev-team",
+                        "target_id": "api-design-review-team",
+                        "relation_type": "can_feed",
+                        "confidence": 0.91,
+                    }
+                ],
                 "missing_contracts": [
                     {
                         "slot_name": "security_findings",
@@ -86,6 +94,14 @@ def _sample_planning_result() -> dict:
                 "edge_confidence": 0.9,
                 "plan_classification": "structurally_valid_but_incomplete",
                 "connectivity_trace": ["consumes", "depends_on"],
+                "can_feed_edges": [
+                    {
+                        "source_id": "wisedev-team",
+                        "target_id": "api-pentest-team",
+                        "relation_type": "can_feed",
+                        "confidence": 0.88,
+                    }
+                ],
                 "missing_contracts": [],
                 "steps": [
                     {"skill_id": "wisedev-team"},
@@ -137,6 +153,18 @@ def test_plan_reranker_only_sorts_existing_candidate_plans() -> None:
     assert recommended[0]["plan_classification"] == "structurally_valid_but_incomplete"
     assert recommended[0]["connectivity_trace"] == ["consumes", "depends_on"]
     assert recommended[0]["missing_contracts"] == []
+    assert recommended[0]["steps"] == [
+        {"skill_id": "wisedev-team"},
+        {"skill_id": "api-pentest-team"},
+    ]
+    assert recommended[0]["can_feed_edges"] == [
+        {
+            "source_id": "wisedev-team",
+            "target_id": "api-pentest-team",
+            "relation_type": "can_feed",
+            "confidence": 0.88,
+        }
+    ]
 
 
 def test_plan_reranker_limits_llm_candidates_by_top_m() -> None:

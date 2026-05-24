@@ -9,6 +9,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional, Protocol, Union
 
+from dotenv import dotenv_values
+
 
 @dataclass(frozen=True)
 class LLMConfig:
@@ -89,6 +91,17 @@ class ChatLLMClient(Protocol):
 
 
 def create_openai_client(config: LLMConfig):
+    """Create an OpenAI-compatible client from configuration.
+
+    Args:
+        config: LLM configuration with API key, base URL, and timeout.
+
+    Returns:
+        Configured OpenAI client instance.
+
+    Raises:
+        RuntimeError: If the openai package is not installed.
+    """
     try:
         from openai import OpenAI
     except ImportError as exc:
@@ -123,6 +136,14 @@ def create_llm_client(config: LLMConfig) -> ChatLLMClient:
 
 
 def is_local_model_path(model: str) -> bool:
+    """Check if a model string refers to an existing local path.
+
+    Args:
+        model: Model identifier, which may be a local file path or an API model name.
+
+    Returns:
+        True if the model is a non-empty path that exists on disk.
+    """
     if not model:
         return False
     return Path(model).expanduser().exists()
@@ -286,6 +307,14 @@ class VLLMOfflineChatClient:
         return contents
 
     def _engine(self):
+        """Initialize or retrieve the vLLM engine and sampling parameters.
+
+        Returns:
+            Tuple of (llm, sampling_params) instances.
+
+        Raises:
+            RuntimeError: If the vllm package is not installed.
+        """
         if self._llm is None or self._sampling_params is None:
             try:
                 from vllm import LLM, SamplingParams
@@ -304,6 +333,18 @@ class VLLMOfflineChatClient:
 
 
 def _messages_to_prompt(llm: Any, messages: List[Dict[str, str]]) -> str:
+    """Convert chat messages to a prompt string using the LLM's tokenizer.
+
+    Attempts to use the model's chat template if available. Falls back to a
+    simple role-based formatting if the tokenizer is unavailable.
+
+    Args:
+        llm: The vLLM LLM instance.
+        messages: List of chat messages with 'role' and 'content' keys.
+
+    Returns:
+        Formatted prompt string ready for generation.
+    """
     try:
         tokenizer = llm.get_tokenizer()
         return tokenizer.apply_chat_template(
@@ -321,6 +362,17 @@ def _messages_to_prompt(llm: Any, messages: List[Dict[str, str]]) -> str:
 
 
 def _strip_json_fences(content: str) -> str:
+    """Remove markdown JSON code fences from content.
+
+    Strips leading and trailing ``` markers that may wrap JSON output
+    from the model.
+
+    Args:
+        content: Raw text that may contain markdown code fences.
+
+    Returns:
+        Content with code fences removed.
+    """
     stripped = content.strip()
     if stripped.startswith("```"):
         lines = stripped.splitlines()
@@ -333,6 +385,17 @@ def _strip_json_fences(content: str) -> str:
 
 
 def extract_message_content(message: Any) -> str:
+    """Extract text content from a chat completion message.
+
+    Handles various message content formats including plain strings,
+    multi-part content lists, and parsed JSON objects.
+
+    Args:
+        message: A chat completion message object from the API.
+
+    Returns:
+        Extracted text content, or empty string if none found.
+    """
     content = getattr(message, "content", None)
     if isinstance(content, str):
         return content.strip()
@@ -363,6 +426,17 @@ def extract_message_content(message: Any) -> str:
 
 
 def safe_model_dump(value: Any) -> str:
+    """Safely serialize a model object to JSON string.
+
+    Attempts multiple serialization strategies (model_dump, to_dict,
+    __dict__) and falls back to repr() if all else fails.
+
+    Args:
+        value: The object to serialize.
+
+    Returns:
+        JSON string representation, truncated to 2000 characters.
+    """
     try:
         if hasattr(value, "model_dump"):
             data = value.model_dump()
@@ -379,17 +453,15 @@ def safe_model_dump(value: Any) -> str:
 
 
 def _load_env_file(path: Path) -> Dict[str, str]:
+    """Load environment variables from a .env file.
+
+    Args:
+        path: Path to the .env file.
+
+    Returns:
+        Dictionary of environment variable key-value pairs.
+        Returns an empty dict if the file does not exist.
+    """
     if not path.exists():
         return {}
-
-    values: Dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key:
-            values[key] = value
-    return values
+    return dict(dotenv_values(path))

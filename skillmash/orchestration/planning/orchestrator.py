@@ -26,7 +26,7 @@ from skillmash.orchestration.strategy import ReliabilityFirstStrategy
 from skillmash.orchestration.strategy.interfaces import PruneContext
 from skillmash.orchestration.validation import default_policy, hard_filter_plans
 from skillmash.reranking import PlanReranker
-from skillmash.representation.llm import LLMConfig, create_llm_client
+from skillmash.common.llm import LLMConfig, create_llm_client
 
 logger = logging.getLogger(__name__)
 

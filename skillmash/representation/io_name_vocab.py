@@ -23,7 +23,7 @@ from skillmash.representation.base_vocab import (
     _normalize_max_vocab_size,
     term_similarity,
 )
-from skillmash.representation.llm import (
+from skillmash.common.llm import (
     LLMConfig,
     create_llm_client,
 )

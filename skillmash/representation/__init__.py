@@ -23,7 +23,7 @@ from skillmash.representation.io_name_vocab import (
     IONameVocabulary,
     OpenAICompatibleIONameResolver,
 )
-from skillmash.representation.llm import LLMConfig
+from skillmash.common.llm import LLMConfig
 from skillmash.representation.manifest import SkillManifestParser
 from skillmash.representation.models import (
     ArtifactSpec,

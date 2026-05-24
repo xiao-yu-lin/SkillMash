@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any, Protocol
 
-from skillmash.representation.llm import LLMConfig, create_llm_client
+from skillmash.common.llm import LLMConfig, create_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +283,7 @@ def _recommendation_from_candidate(
     return {
         "title": title,
         "status": candidate.get("status", "unknown"),
+        "steps": list(candidate.get("steps", [])),
         "skill_order": [
             step.get("skill_id")
             for step in candidate.get("steps", [])
@@ -300,6 +301,7 @@ def _recommendation_from_candidate(
             for stage in candidate.get("stages", [])
         ],
         "source_plan_index": plan_index,
+        "can_feed_edges": list(candidate.get("can_feed_edges", [])),
         "missing_inputs": candidate.get("missing_inputs", []),
         "plan_classification": candidate.get("plan_classification"),
         "connectivity_trace": candidate.get("connectivity_trace", []),

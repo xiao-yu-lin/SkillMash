@@ -14,7 +14,7 @@ from skillmash.graph.models import (
     RelationCandidate,
     SkillRegistry,
 )
-from skillmash.representation.llm import (
+from skillmash.common.llm import (
     LLMConfig,
     create_llm_client,
 )

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
-from skillmash.representation.llm import (
+from skillmash.common.llm import (
     LLMConfig,
     create_llm_client,
 )

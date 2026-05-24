@@ -672,6 +672,15 @@ def test_docs_and_example_reference_llm_env_names() -> None:
     assert "LLM_API_KEY" in example
 
 
+def test_representation_example_uses_rich_progress() -> None:
+    example = Path("examples/representation_extraction_demo.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "from rich.console import Console" in example
+    assert "class RichProgress" in example
+
+
 def _manifest(tmp_path: Path):
     skill_dir = tmp_path / "aris-arxiv"
     skill_dir.mkdir()

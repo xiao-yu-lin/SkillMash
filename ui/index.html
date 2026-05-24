@@ -183,6 +183,13 @@
       height: 36px;
     }
 
+    input[type="number"] {
+      height: 36px;
+      width: 120px;
+      padding: 0 10px;
+      outline: 0;
+    }
+
     textarea {
       min-height: 104px;
       padding: 10px;
@@ -211,22 +218,6 @@
     input:focus,
     select:focus {
       border-color: #5e6b80;
-    }
-
-    .file-button {
-      display: grid;
-      place-items: center;
-      height: 38px;
-      border: 1px dashed #596273;
-      border-radius: 8px;
-      color: var(--muted);
-      cursor: pointer;
-      text-align: center;
-      font-size: 13px;
-    }
-
-    .file-button input {
-      display: none;
     }
 
     label.check {
@@ -556,16 +547,8 @@
       <div class="section stack">
         <div>
           <h1>SkillMash Graph</h1>
-          <div class="empty" id="sourceLabel">正在加载 .skillmash/index</div>
+          <div class="empty" id="sourceLabel">正在加载 graph 目录</div>
         </div>
-        <label class="file-button">
-          选择 build_manifest.json 或 skill_graph.json
-          <input id="fileInput" type="file" accept=".json,application/json">
-        </label>
-        <label class="file-button">
-          选择构建输出文件夹
-          <input id="folderInput" type="file" webkitdirectory directory multiple>
-        </label>
         <div class="stats">
           <div class="stat"><strong id="nodeCount">0</strong><span>节点</span></div>
           <div class="stat"><strong id="edgeCount">0</strong><span>边</span></div>
@@ -593,7 +576,12 @@
         <h2>图例</h2>
         <div class="legend">
           <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:var(--skill)"></i> Skill</span><span id="legendSkill">0</span></div>
+          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#f4a261"></i> Artifact</span><span>节点</span></div>
+          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#ffd166"></i> Slot</span><span>节点</span></div>
           <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#ffffff"></i> can_feed</span><span>关系</span></div>
+          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#ffd166"></i> produces</span><span>关系</span></div>
+          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#f4a261"></i> consumes</span><span>关系</span></div>
+          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#e9c46a"></i> aggregates</span><span>关系</span></div>
           <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#73a7ff"></i> similar_to</span><span>关系</span></div>
           <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#d87bff"></i> substitute_for</span><span>关系</span></div>
         </div>
@@ -646,6 +634,21 @@
             <option value="5">5</option>
           </select>
         </div>
+        <div class="row">
+          <label class="check">Top-M</label>
+          <select id="orchestrationTopM" aria-label="送入重排的候选计划数">
+            <option value="8">8</option>
+            <option value="12" selected>12</option>
+            <option value="20">20</option>
+            <option value="30">30</option>
+          </select>
+        </div>
+        <div class="row">
+          <label class="check">Min Edge Confidence</label>
+          <input id="orchestrationMinEdgeConfidence" type="number" min="0" max="1" step="0.05" value="0.7" aria-label="最小边置信度">
+        </div>
+        <label class="check"><input id="orchestrationAllowSimilar" type="checkbox"> 允许 similar_to 参与槽位替换</label>
+        <label class="check"><input id="orchestrationShowCandidates" type="checkbox"> 返回并保留候选计划</label>
         <button id="runOrchestration" class="primary">生成编排计划</button>
         <div id="orchestrationStatus" class="empty">输入任务目标后在下方生成计划图。</div>
       </div>
@@ -676,13 +679,15 @@
       nodeList: document.getElementById("nodeList"),
       detailPanel: document.getElementById("detailPanel"),
       edgeList: document.getElementById("edgeList"),
-      fileInput: document.getElementById("fileInput"),
-      folderInput: document.getElementById("folderInput"),
       zoomIn: document.getElementById("zoomIn"),
       zoomOut: document.getElementById("zoomOut"),
       fitView: document.getElementById("fitView"),
       orchestrationQuery: document.getElementById("orchestrationQuery"),
       orchestrationTopK: document.getElementById("orchestrationTopK"),
+      orchestrationTopM: document.getElementById("orchestrationTopM"),
+      orchestrationMinEdgeConfidence: document.getElementById("orchestrationMinEdgeConfidence"),
+      orchestrationAllowSimilar: document.getElementById("orchestrationAllowSimilar"),
+      orchestrationShowCandidates: document.getElementById("orchestrationShowCandidates"),
       runOrchestration: document.getElementById("runOrchestration"),
       orchestrationStatus: document.getElementById("orchestrationStatus"),
       orchestrationResults: document.getElementById("orchestrationResults"),
@@ -692,6 +697,8 @@
 
     const colors = {
       skill: "#4db6ac",
+      artifact: "#f4a261",
+      slot: "#ffd166",
       input: "#4db6ac",
       output: "#4db6ac",
       task: "#4db6ac",
@@ -719,16 +726,17 @@
 
     function typeFromId(id) {
       if (id.startsWith("skill:")) return "skill";
+      if (id.startsWith("artifact:")) return "artifact";
+      if (id.startsWith("slot:")) return "slot";
       if (id.startsWith("input:")) return "input";
       if (id.startsWith("output:")) return "output";
-      if (id.startsWith("artifact:")) return "output";
       if (id.startsWith("task:")) return "task";
       if (id.startsWith("type:")) return "data_type";
       return "skill";
     }
 
     function labelFromId(id) {
-      return id.replace(/^(skill:|input:|output:|artifact:|task:|type:)/, "");
+      return id.replace(/^(skill:|slot:|input:|output:|artifact:|task:|type:)/, "");
     }
 
     function normalizeNode(raw, index) {
@@ -820,7 +828,7 @@
 
     async function loadDefault() {
       const outputDir = getOutputDirFromUrl();
-      const basePath = outputDir || "../.skillmash/index";
+      const basePath = outputDir || ".skillmash/index";
       try {
         const manifestResponse = await fetchJsonFromDir(basePath, "build_manifest.json");
         const manifest = manifestResponse.ok ? await safeJson(manifestResponse.response) : null;
@@ -838,7 +846,7 @@
         els.sourceLabel.textContent = manifest?.created_at ? `${label} · ${new Date(manifest.created_at).toLocaleString()}` : label;
         afterGraphLoaded();
       } catch (error) {
-        els.sourceLabel.innerHTML = `<span class="error">${escapeHtml(error.message)}。请确认路径在服务根目录下，或使用“选择构建输出文件夹”。</span>`;
+        els.sourceLabel.innerHTML = `<span class="error">${escapeHtml(error.message)}。请在启动服务时通过 --build-dir 传入目录，并确认路径位于服务根目录下。</span>`;
         graph = { nodes: [], edges: [] };
         applyFilters();
       }
@@ -851,87 +859,19 @@
 
     function getOutputDirFromUrl() {
       const params = new URLSearchParams(window.location.search);
-      const value = params.get("build_dir") || params.get("out_dir") || params.get("index") || params.get("dir");
+      const value = params.get("build_dir");
       return value ? normalizePath(decodeURIComponent(value)) : "";
     }
 
     function joinUrlPath(basePath, fileName) {
       const base = normalizePath(basePath).replace(/\/+$/, "");
       const name = normalizePath(fileName).replace(/^\/+/, "");
-      return `${base}/${name}`;
-    }
-
-    async function readJsonFile(file) {
-      const text = await file.text();
-      const payload = JSON.parse(text);
-      if (payload.artifacts?.graph) {
-        throw new Error("请选择构建输出文件夹，或直接选择 skill_graph.json。单独选择 manifest 时浏览器不能读取相邻文件。");
-      }
-      graph = normalizeGraph(payload, null);
-      els.sourceLabel.textContent = `已加载 ${file.name}`;
-      afterGraphLoaded();
-    }
-
-    async function readBuildFolder(files) {
-      const fileMap = new Map();
-      for (const file of files) {
-        const path = normalizePath(file.webkitRelativePath || file.name);
-        fileMap.set(path, file);
-        fileMap.set(file.name, file);
-      }
-
-      const manifestFile = findFolderFile(fileMap, "build_manifest.json");
-      const manifest = manifestFile ? await parseJsonFile(manifestFile, true) : null;
-      const graphName = manifest?.artifacts?.graph || "skill_graph.json";
-      const skillsName = manifest?.artifacts?.skills || "skills.json";
-      const graphFile = findFolderFile(fileMap, graphName);
-
-      if (!graphFile) {
-        throw new Error(`所选文件夹中没有找到 ${graphName}`);
-      }
-
-      const graphPayload = await parseJsonFile(graphFile, false);
-      const skillsFile = findFolderFile(fileMap, skillsName);
-      const skillPayload = skillsFile ? await parseJsonFile(skillsFile, true) : null;
-      graph = normalizeGraph(graphPayload, skillPayload);
-
-      const folderName = getFolderName(files[0]);
-      const skillStatus = skillsFile && skillPayload ? `，已读取 ${skillsName}` : "，未使用 skills.json";
-      els.sourceLabel.textContent = `已加载 ${folderName || "构建输出文件夹"}${skillStatus}`;
-      if (manifest?.created_at) {
-        els.sourceLabel.textContent += ` · ${new Date(manifest.created_at).toLocaleString()}`;
-      }
-      afterGraphLoaded();
-    }
-
-    async function parseJsonFile(file, optional) {
-      try {
-        return JSON.parse(await file.text());
-      } catch (error) {
-        if (optional) return null;
-        throw new Error(`${file.name} 不是有效 JSON：${error.message}`);
-      }
-    }
-
-    function findFolderFile(fileMap, name) {
-      const normalizedName = normalizePath(name);
-      if (fileMap.has(normalizedName)) return fileMap.get(normalizedName);
-      const baseName = normalizedName.split("/").pop();
-      for (const [path, file] of fileMap.entries()) {
-        if (path.endsWith(`/${normalizedName}`) || path.endsWith(`/${baseName}`) || path === baseName) {
-          return file;
-        }
-      }
-      return null;
+      if (!base) return `/${name}`;
+      return `/${base}/${name}`;
     }
 
     function normalizePath(path) {
       return String(path || "").replace(/\\/g, "/").replace(/^\/+/, "");
-    }
-
-    function getFolderName(file) {
-      const path = normalizePath(file?.webkitRelativePath || "");
-      return path.split("/")[0] || "";
     }
 
     async function safeJson(response) {
@@ -1043,6 +983,14 @@
       }
 
       const props = selectedNode.properties || {};
+      const extraMeta = [];
+      if (selectedNode.type === "artifact") {
+        if (props.name) extraMeta.push(`<div><span>工件名</span><strong>${escapeHtml(props.name)}</strong></div>`);
+        if (props.type) extraMeta.push(`<div><span>工件类型</span><strong>${escapeHtml(props.type)}</strong></div>`);
+      }
+      if (selectedNode.type === "slot" && props.name) {
+        extraMeta.push(`<div><span>槽位名</span><strong>${escapeHtml(props.name)}</strong></div>`);
+      }
       const description = props.description ? `<div class="detail-text">${escapeHtml(props.description)}</div>` : "";
       const tags = [...(props.tasks || []), ...(props.skill_tags || []), ...(props.data_tags || [])].slice(0, 16);
       const tagsHtml = tags.length ? `<div>${tags.map(tag => `<span class="pill">${escapeHtml(tag)}</span>`).join(" ")}</div>` : "";
@@ -1059,6 +1007,7 @@
           <div><span>类型</span><strong>${escapeHtml(selectedNode.type)}</strong></div>
           <div><span>关联度</span><strong>${selectedNode.degree}</strong></div>
           ${props.version ? `<div><span>版本</span><strong>${escapeHtml(props.version)}</strong></div>` : ""}
+          ${extraMeta.join("")}
         </div>
         ${description}
         ${tagsHtml}
@@ -1226,6 +1175,10 @@
       if (type === "has_output") return "#4db6ac";
       if (type === "requires_input") return "#4db6ac";
       if (type === "can_feed") return "#ffffff";
+      if (type === "produces") return "#ffd166";
+      if (type === "consumes") return "#f4a261";
+      if (type === "aggregates") return "#e9c46a";
+      if (type === "depends_on") return "#8ecae6";
       if (type === "similar_to") return "#73a7ff";
       if (type === "substitute_for") return "#d87bff";
       return "#7d8797";
@@ -1355,26 +1308,6 @@
       el.addEventListener("change", applyFilters);
     });
 
-    els.fileInput.addEventListener("change", async event => {
-      const file = event.target.files?.[0];
-      if (!file) return;
-      try {
-        await readJsonFile(file);
-      } catch (error) {
-        els.sourceLabel.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
-      }
-    });
-
-    els.folderInput.addEventListener("change", async event => {
-      const files = [...(event.target.files || [])];
-      if (!files.length) return;
-      try {
-        await readBuildFolder(files);
-      } catch (error) {
-        els.sourceLabel.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
-      }
-    });
-
     els.zoomIn.addEventListener("click", () => zoomAt(1.2));
     els.zoomOut.addEventListener("click", () => zoomAt(0.84));
     els.fitView.addEventListener("click", fitView);
@@ -1397,12 +1330,17 @@
       els.orchestrationResults.innerHTML = '<div class="plan-card loading"><div class="empty">处理中，请稍候...</div></div>';
 
       try {
+        const minEdgeConfidence = Math.max(0, Math.min(1, Number(els.orchestrationMinEdgeConfidence.value || 0.7)));
         const response = await fetch("/api/orchestrate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             query,
             top_k: parseInt(els.orchestrationTopK.value, 10),
+            top_m: parseInt(els.orchestrationTopM.value, 10),
+            min_edge_confidence: minEdgeConfidence,
+            allow_similar_slot_substitute: els.orchestrationAllowSimilar.checked,
+            show_candidates: els.orchestrationShowCandidates.checked,
             build_dir: getOutputDirFromUrl() || "OUTPUT/build"
           })
         });
@@ -1416,8 +1354,10 @@
         renderOrchestrationResults(result);
 
         els.orchestrationStatus.className = "empty";
-        const planCount = result.recommended_plans?.length || 0;
-        els.orchestrationStatus.textContent = `已生成 ${planCount} 个推荐计划。`;
+        const recommendedCount = result.recommended_plans?.length || 0;
+        const candidateCount = result.plans?.length || 0;
+        const rankingMode = result.ranking_mode || "unknown";
+        els.orchestrationStatus.textContent = `推荐 ${recommendedCount} 个，候选 ${candidateCount} 个，重排模式：${rankingMode}。`;
       } catch (error) {
         els.orchestrationStatus.className = "empty status-error";
         els.orchestrationStatus.textContent = `生成失败：${error.message}`;
@@ -1428,15 +1368,20 @@
     }
 
     function renderOrchestrationResults(result) {
-      const plans = result.recommended_plans || [];
+      const recommended = result.recommended_plans || [];
+      const candidates = result.plans || [];
+      const plans = recommended.length ? recommended : candidates;
       if (!plans.length) {
-        els.orchestrationResults.innerHTML = '<div class="empty">没有找到合适的编排计划。</div>';
+        const failCounts = result.decision?.fail_code_counts;
+        const failSummary = failCounts ? Object.entries(failCounts).map(([k, v]) => `${k}: ${v}`).join(" | ") : "";
+        const detail = failSummary ? `<div class="plan-meta">失败原因统计：${escapeHtml(failSummary)}</div>` : "";
+        els.orchestrationResults.innerHTML = `<div class="empty">没有找到合适的编排计划。</div>${detail}`;
         return;
       }
 
       els.orchestrationResults.innerHTML = plans.map((plan, index) => {
         const stages = plan.stages || [];
-        const reason = plan.reason || "";
+        const reason = plan.reason || (plan.reasons || []).join("；");
         const edges = plan.can_feed_edges || [];
         const dagHtml = renderDag(stages, edges);
         const graphMeta = `<div class="plan-meta">skills: ${countStageSkills(stages)} · directed edges: ${edges.length}</div>`;
@@ -1446,7 +1391,7 @@
           ? `<div class="plan-meta">缺失输入：${escapeHtml(formatMissing(missing))}</div>`
           : "";
         const status = plan.status || "unknown";
-        const title = plan.title || `方案 ${index + 1}`;
+        const title = plan.title || `${recommended.length ? "推荐方案" : "候选方案"} ${index + 1}`;
 
         return `
           <div class="plan-card">

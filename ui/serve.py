@@ -32,11 +32,18 @@ class QuietHandler(SimpleHTTPRequestHandler):
         try:
             request = self._read_json_body()
             query = str(request.get("query") or "").strip()
+            min_edge_confidence = float(request.get("min_edge_confidence") or 0.7)
+            top_m = int(request.get("top_m") or 12)
+            show_candidates = bool(request.get("show_candidates"))
+            allow_similar = bool(request.get("allow_similar_slot_substitute"))
             _log(
                 "orchestrate request started "
                 f"query_len={len(query)} top_k={request.get('top_k', 3)} "
                 f"max_plans={request.get('max_plans', 20)} max_depth={request.get('max_depth', 4)} "
-                f"max_branch={request.get('max_branch', 8)}"
+                f"max_branch={request.get('max_branch', 8)} "
+                f"min_edge_confidence={min_edge_confidence} top_m={top_m} "
+                f"show_candidates={show_candidates} "
+                f"allow_similar_slot_substitute={allow_similar}"
             )
             response = self._orchestrate(request)
             self._send_json(200, response)
@@ -74,10 +81,21 @@ class QuietHandler(SimpleHTTPRequestHandler):
     def _orchestrate(self, request: dict) -> dict:
         started_at = perf_counter()
         root = Path(self.root_dir or ".").resolve()
-        build_dir = _resolve_build_dir(root, str(request.get("build_dir") or self.build_dir or "OUTPUT/build"))
+        build_dir = _resolve_build_dir(
+            root,
+            str(
+                request.get("build_dir")
+                or self.build_dir
+                or "OUTPUT/build"
+            ),
+        )
         query = str(request.get("query") or "").strip()
         if not query:
             raise ValueError("query is required")
+        min_edge_confidence = max(0.0, min(1.0, float(request.get("min_edge_confidence") or 0.7)))
+        top_m = max(1, min(80, int(request.get("top_m") or 12)))
+        show_candidates = bool(request.get("show_candidates"))
+        allow_similar = bool(request.get("allow_similar_slot_substitute"))
         top_k = max(1, min(10, int(request.get("top_k") or 3)))
         max_plans = max(1, min(80, int(request.get("max_plans") or 20)))
         max_depth = max(1, min(8, int(request.get("max_depth") or 4)))
@@ -88,7 +106,6 @@ class QuietHandler(SimpleHTTPRequestHandler):
         _ensure_project_import_paths(root, sys.path)
 
         from skillmash.orchestration import SkillOrchestrator, load_build_artifacts
-        from skillmash.reranking import PlanReranker
         from skillmash.representation import LLMConfig
 
         _log(f"loading llm config and build artifacts from {build_dir}")
@@ -99,27 +116,27 @@ class QuietHandler(SimpleHTTPRequestHandler):
 
         _log(
             "planning candidates "
-            f"max_depth={max_depth} max_plans={max_plans} max_branch={max_branch}"
+            f"min_edge_confidence={min_edge_confidence} max_depth={max_depth} "
+            f"max_plans={max_plans} max_branch={max_branch} top_m={top_m} top_k={top_k} "
+            f"show_candidates={show_candidates} allow_similar_slot_substitute={allow_similar}"
         )
         stage_start = perf_counter()
         planner = SkillOrchestrator(
             artifacts,
             llm_config=llm_config,
+            min_edge_confidence=min_edge_confidence,
             max_depth=max_depth,
             max_plans=max_plans,
             max_branch=max_branch,
+            top_m=top_m,
+            top_k=top_k,
+            include_candidates=show_candidates,
+            allow_similar_slot_substitute=allow_similar,
         )
         result = planner.plan(query)
         _log(f"planning finished elapsed={perf_counter() - stage_start:.2f}s")
-
-        _log(f"reranking plans top_k={top_k}")
-        stage_start = perf_counter()
-        reranked = PlanReranker(llm_config=llm_config).rerank(result, top_k=top_k)
-        _log(
-            f"reranking finished elapsed={perf_counter() - stage_start:.2f}s "
-            f"total_elapsed={perf_counter() - started_at:.2f}s"
-        )
-        return reranked
+        _log(f"orchestration finished total_elapsed={perf_counter() - started_at:.2f}s")
+        return result
 
 
 def main() -> None:
@@ -134,16 +151,11 @@ def main() -> None:
     parser.add_argument(
         "--build-dir",
         default="",
-        help="Build output directory to load when opening the UI, relative to --root.",
-    )
-    parser.add_argument(
-        "--out-dir",
-        default="",
-        help=argparse.SUPPRESS,
+        help="Build output directory to load, relative to --root.",
     )
     args = parser.parse_args()
 
-    QuietHandler.build_dir = _normalize_url_path(args.build_dir or args.out_dir)
+    QuietHandler.build_dir = _normalize_url_path(args.build_dir)
     QuietHandler.root_dir = str(Path(args.root).resolve())
     handler = lambda *handler_args, **handler_kwargs: QuietHandler(
         *handler_args,

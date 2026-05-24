@@ -25,6 +25,8 @@ from skillmash.representation.models import (
     ParameterSpec,
     RawSkillManifest,
     SkillRepresentation,
+    SlotCandidate,
+    SlotRef,
 )
 from skillmash.representation.semantic_vocab import (
     HeuristicSemanticResolver,
@@ -112,6 +114,12 @@ class SkillRepresentationNormalizer:
         )
         preconditions = self._normalize_conditions(extracted.preconditions)
         postconditions = self._normalize_conditions(extracted.postconditions)
+        emits_slots, consumes_slots = self._normalize_slots(
+            extracted=extracted,
+            manifest=manifest,
+            skill_id=identity.id,
+            diagnostics=diagnostics,
+        )
 
         representation = SkillRepresentation(
             id=identity.id,
@@ -123,6 +131,8 @@ class SkillRepresentationNormalizer:
             outputs=outputs,
             preconditions=preconditions,
             postconditions=postconditions,
+            emits_slots=emits_slots,
+            consumes_slots=consumes_slots,
         )
         self._validate(representation, manifest, diagnostics)
         return NormalizationResult(
@@ -957,6 +967,369 @@ class SkillRepresentationNormalizer:
                 )
             )
         return normalized
+
+    def _normalize_slots(
+        self,
+        *,
+        extracted: ExtractedSkillSchema,
+        manifest: RawSkillManifest,
+        skill_id: str,
+        diagnostics: List[ExtractionDiagnostic],
+    ) -> Tuple[List[SlotRef], List[SlotRef]]:
+        emits = self._run_slot_gate_pipeline(
+            direction="emits",
+            raw_candidates=list(extracted.emits_slots),
+            manifest=manifest,
+            skill_id=skill_id,
+            diagnostics=diagnostics,
+        )
+        consumes = self._run_slot_gate_pipeline(
+            direction="consumes",
+            raw_candidates=list(extracted.consumes_slots),
+            manifest=manifest,
+            skill_id=skill_id,
+            diagnostics=diagnostics,
+        )
+        self._role_shape_gate(
+            skill_id=skill_id,
+            manifest=manifest,
+            emits=emits,
+            consumes=consumes,
+            diagnostics=diagnostics,
+        )
+        return emits, consumes
+
+    def _run_slot_gate_pipeline(
+        self,
+        *,
+        direction: str,
+        raw_candidates: List[SlotCandidate],
+        manifest: RawSkillManifest,
+        skill_id: str,
+        diagnostics: List[ExtractionDiagnostic],
+    ) -> List[SlotRef]:
+        # 1) schema gate
+        schema_passed: List[Dict[str, Any]] = []
+        for raw_candidate in raw_candidates:
+            candidate = self._slot_schema_gate(raw_candidate)
+            if candidate is None:
+                self._record_slot_status(
+                    diagnostics=diagnostics,
+                    skill_id=skill_id,
+                    path=str(manifest.folder.path),
+                    kind="",
+                    direction=direction,
+                    candidate_snapshot=self._slot_candidate_snapshot(raw_candidate),
+                    status="dropped_invalid_schema",
+                    reason="candidate must include snake_case kind/parent and confidence in [0,1]",
+                )
+                continue
+            schema_passed.append(candidate)
+
+        # 2) parent gate
+        parent_passed: List[Dict[str, Any]] = []
+        whitelist = set(self.config.slot_parent_whitelist)
+        for candidate in schema_passed:
+            if candidate["parent"] not in whitelist:
+                self._record_slot_status(
+                    diagnostics=diagnostics,
+                    skill_id=skill_id,
+                    path=str(manifest.folder.path),
+                    kind=candidate["name"],
+                    direction=direction,
+                    candidate_snapshot=candidate,
+                    status="dropped_invalid_parent",
+                    reason="parent is outside slot_parent_whitelist",
+                )
+                continue
+            parent_passed.append(candidate)
+
+        # 3) confidence gate
+        confidence_passed: List[Dict[str, Any]] = []
+        for candidate in parent_passed:
+            if candidate["confidence"] < self.config.slot_confidence_threshold:
+                self._record_slot_status(
+                    diagnostics=diagnostics,
+                    skill_id=skill_id,
+                    path=str(manifest.folder.path),
+                    kind=candidate["name"],
+                    direction=direction,
+                    candidate_snapshot=candidate,
+                    status="dropped_low_confidence",
+                    reason=(
+                        "confidence below threshold "
+                        f"{self.config.slot_confidence_threshold:.2f}"
+                    ),
+                )
+                continue
+            confidence_passed.append(candidate)
+
+        # 4) direction gate
+        direction_passed: List[Dict[str, Any]] = []
+        for candidate in confidence_passed:
+            if self._slot_direction_mismatch(direction=direction, candidate=candidate):
+                self._record_slot_status(
+                    diagnostics=diagnostics,
+                    skill_id=skill_id,
+                    path=str(manifest.folder.path),
+                    kind=candidate["name"],
+                    direction=direction,
+                    candidate_snapshot=candidate,
+                    status="dropped_direction_mismatch",
+                    reason="direction-specific naming guard rejected candidate",
+                )
+                continue
+            direction_passed.append(candidate)
+
+        # 5) duplicate gate
+        deduped: List[Dict[str, Any]] = []
+        seen_by_key: Dict[Tuple[str, str], int] = {}
+        for candidate in direction_passed:
+            key = (candidate["name"], candidate["parent"])
+            existing_index = seen_by_key.get(key)
+            if existing_index is None:
+                seen_by_key[key] = len(deduped)
+                deduped.append(candidate)
+                continue
+            existing = deduped[existing_index]
+            if candidate["confidence"] > existing["confidence"]:
+                self._record_slot_status(
+                    diagnostics=diagnostics,
+                    skill_id=skill_id,
+                    path=str(manifest.folder.path),
+                    kind=existing["name"],
+                    direction=direction,
+                    candidate_snapshot=existing,
+                    status="dropped_duplicate",
+                    reason="lower confidence duplicate",
+                )
+                deduped[existing_index] = candidate
+            else:
+                self._record_slot_status(
+                    diagnostics=diagnostics,
+                    skill_id=skill_id,
+                    path=str(manifest.folder.path),
+                    kind=candidate["name"],
+                    direction=direction,
+                    candidate_snapshot=candidate,
+                    status="dropped_duplicate",
+                    reason="lower confidence duplicate",
+                )
+
+        # 6) parent conflict gate (margin-aware)
+        parent_resolved: List[Dict[str, Any]] = []
+        by_name: Dict[str, List[Dict[str, Any]]] = {}
+        for candidate in deduped:
+            by_name.setdefault(candidate["name"], []).append(candidate)
+        for candidates in by_name.values():
+            if len(candidates) == 1:
+                parent_resolved.extend(candidates)
+                continue
+            ordered = sorted(candidates, key=lambda item: item["confidence"], reverse=True)
+            leader = ordered[0]
+            runner_up = ordered[1]
+            if (leader["confidence"] - runner_up["confidence"]) < self.config.slot_parent_conflict_margin:
+                for candidate in ordered:
+                    self._record_slot_status(
+                        diagnostics=diagnostics,
+                        skill_id=skill_id,
+                        path=str(manifest.folder.path),
+                        kind=candidate["name"],
+                        direction=direction,
+                        candidate_snapshot=candidate,
+                        status="dropped_ambiguous_parent",
+                        reason=(
+                            "multiple parent guesses within confidence margin "
+                            f"{self.config.slot_parent_conflict_margin:.2f}"
+                        ),
+                    )
+                continue
+            parent_resolved.append(leader)
+            for candidate in ordered[1:]:
+                self._record_slot_status(
+                    diagnostics=diagnostics,
+                    skill_id=skill_id,
+                    path=str(manifest.folder.path),
+                    kind=candidate["name"],
+                    direction=direction,
+                    candidate_snapshot=candidate,
+                    status="dropped_parent_conflict",
+                    reason="lower confidence parent for the same slot name",
+                )
+
+        # 7) cardinality gate (max per direction kind)
+        ordered = sorted(
+            parent_resolved,
+            key=lambda item: (
+                -item["confidence"],
+                item["name"],
+                item["parent"],
+            ),
+        )
+        kept: List[Dict[str, Any]] = ordered[: self.config.slot_max_per_kind]
+        dropped = ordered[self.config.slot_max_per_kind :]
+        for candidate in dropped:
+            self._record_slot_status(
+                diagnostics=diagnostics,
+                skill_id=skill_id,
+                path=str(manifest.folder.path),
+                kind=candidate["name"],
+                direction=direction,
+                candidate_snapshot=candidate,
+                status="dropped_overflow",
+                reason=(
+                    "cardinality gate overflow: "
+                    f"max={self.config.slot_max_per_kind} per kind"
+                ),
+            )
+
+        accepted: List[SlotRef] = []
+        for candidate in kept:
+            slot_ref = SlotRef(
+                name=candidate["name"],
+                parent=candidate["parent"],
+                confidence=float(candidate["confidence"]),
+                source="llm_slot_candidate",
+                status="accepted",
+                evidence=str(candidate.get("evidence") or ""),
+            )
+            accepted.append(slot_ref)
+            self._record_slot_status(
+                diagnostics=diagnostics,
+                skill_id=skill_id,
+                path=str(manifest.folder.path),
+                kind=slot_ref.name,
+                direction=direction,
+                candidate_snapshot=candidate,
+                status="accepted",
+                reason="passed all slot gates",
+            )
+        return accepted
+
+    def _slot_schema_gate(
+        self,
+        raw_candidate: Union[SlotCandidate, Dict[str, Any], Any],
+    ) -> Optional[Dict[str, Any]]:
+        data = to_dict(raw_candidate)
+        raw_kind = str(data.get("kind") or "").strip()
+        raw_parent = str(data.get("parent_guess") or "").strip()
+        raw_evidence = str(data.get("evidence") or "").strip()
+        if not raw_kind or not raw_parent:
+            return None
+        normalized_kind = normalize_parameter_name(raw_kind)
+        normalized_parent = normalize_parameter_name(raw_parent)
+        if normalized_kind != raw_kind or normalized_parent != raw_parent:
+            return None
+        try:
+            confidence = float(data.get("confidence"))
+        except (TypeError, ValueError):
+            return None
+        if confidence < 0.0 or confidence > 1.0:
+            return None
+        return {
+            "name": normalized_kind,
+            "parent": normalized_parent,
+            "confidence": confidence,
+            "evidence": raw_evidence,
+        }
+
+    def _slot_direction_mismatch(
+        self,
+        *,
+        direction: str,
+        candidate: Dict[str, Any],
+    ) -> bool:
+        name = str(candidate.get("name") or "")
+        if direction == "emits":
+            return name.startswith("consumes_") or name.startswith("input_")
+        if direction == "consumes":
+            return name.startswith("emits_") or name.startswith("output_")
+        return False
+
+    def _role_shape_gate(
+        self,
+        *,
+        skill_id: str,
+        manifest: RawSkillManifest,
+        emits: List[SlotRef],
+        consumes: List[SlotRef],
+        diagnostics: List[ExtractionDiagnostic],
+    ) -> None:
+        emit_parents = {slot.parent for slot in emits}
+        consume_parents = {slot.parent for slot in consumes}
+        if consumes and not emits:
+            diagnostics.append(
+                ExtractionDiagnostic(
+                    stage="slot_gate",
+                    severity="warning",
+                    code="slot_role_shape_warning",
+                    message="skill consumes slots but emits none",
+                    skill_id=skill_id,
+                    path=str(manifest.folder.path),
+                    details={
+                        "emit_parents": sorted(emit_parents),
+                        "consume_parents": sorted(consume_parents),
+                    },
+                )
+            )
+        if "delivery_brief" in consume_parents and "delivery_brief" not in emit_parents:
+            diagnostics.append(
+                ExtractionDiagnostic(
+                    stage="slot_gate",
+                    severity="warning",
+                    code="slot_role_shape_warning",
+                    message="skill consumes delivery_brief without re-emitting delivery_brief",
+                    skill_id=skill_id,
+                    path=str(manifest.folder.path),
+                    details={
+                        "emit_parents": sorted(emit_parents),
+                        "consume_parents": sorted(consume_parents),
+                    },
+                )
+            )
+
+    def _slot_candidate_snapshot(
+        self,
+        raw_candidate: Union[SlotCandidate, Dict[str, Any], Any],
+    ) -> Dict[str, Any]:
+        data = to_dict(raw_candidate)
+        return {
+            "kind": str(data.get("kind") or ""),
+            "parent_guess": str(data.get("parent_guess") or ""),
+            "confidence": data.get("confidence"),
+            "evidence": str(data.get("evidence") or ""),
+        }
+
+    def _record_slot_status(
+        self,
+        *,
+        diagnostics: List[ExtractionDiagnostic],
+        skill_id: str,
+        path: str,
+        kind: str,
+        direction: str,
+        candidate_snapshot: Dict[str, Any],
+        status: str,
+        reason: str,
+    ) -> None:
+        diagnostics.append(
+            ExtractionDiagnostic(
+                stage="slot_gate",
+                severity="info" if status == "accepted" else "warning",
+                code="slot_candidate_processed",
+                message=f"slot candidate {status}",
+                skill_id=skill_id,
+                path=path,
+                details={
+                    "skill_id": skill_id,
+                    "kind": kind,
+                    "direction": direction,
+                    "candidate": candidate_snapshot,
+                    "status": status,
+                    "reason": reason,
+                },
+            )
+        )
 
     def _validate(
         self,

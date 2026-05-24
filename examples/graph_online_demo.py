@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -83,7 +84,22 @@ def main() -> None:
         action="store_true",
         help="Also print raw candidate plans after recommended plans.",
     )
+    parser.add_argument(
+        "--allow_similar_slot_substitute",
+        action="store_true",
+        help="Allow similar_to edges in slot substitute/grouping. Disabled by default.",
+    )
+    parser.add_argument(
+        "--log_level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Runtime log level. Use DEBUG for planner/reranker diagnostics.",
+    )
     args = parser.parse_args()
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper()),
+        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    )
 
     query = args.query if args.query is not None else input("query> ")
     artifacts = load_build_artifacts(args.build_dir)
@@ -98,6 +114,7 @@ def main() -> None:
         top_m=args.top_m,
         top_k=args.top_k,
         include_candidates=args.show_candidates,
+        allow_similar_slot_substitute=args.allow_similar_slot_substitute,
     )
     result = planner.plan(query)
     if args.json:

@@ -9,17 +9,21 @@ from typing import Any
 def build_slot_groups(
     plans: list[dict[str, Any]],
     relation_edges: list[dict[str, Any]],
+    *,
+    allow_similar: bool = False,
 ) -> list[dict[str, Any]]:
     """Attach slot candidate groups to each plan.
 
-    Slot candidates are built from substitute/similar relations and the current
-    step skill itself. Selection still happens in later validation/ranking.
+    Slot candidates are built from substitute relations by default, and may
+    optionally include similar relations when `allow_similar=True`.
+    Selection still happens in later validation/ranking.
     """
 
     undirected_candidates: dict[str, set[str]] = defaultdict(set)
+    allowed = {"substitute_for", "similar_to"} if allow_similar else {"substitute_for"}
     for edge in relation_edges:
         edge_type = str(edge.get("type") or "")
-        if edge_type not in {"substitute_for", "similar_to"}:
+        if edge_type not in allowed:
             continue
         source = _skill_id(edge.get("source"))
         target = _skill_id(edge.get("target"))

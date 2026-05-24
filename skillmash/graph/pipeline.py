@@ -86,8 +86,8 @@ def _matcher_thresholds(matcher: OntologyMatcher) -> dict:
 def _build_slot_taxonomy(skills: Iterable[SkillRepresentation]) -> dict:
     slots = set()
     for skill in skills:
-        slots.update(getattr(skill, "emits_slots", []) or [])
-        slots.update(getattr(skill, "consumes_slots", []) or [])
+        slots.update(skill.emit_slot_link_keys())
+        slots.update(skill.consume_slot_link_keys())
     return {"slots": sorted(slot for slot in slots if slot)}
 
 

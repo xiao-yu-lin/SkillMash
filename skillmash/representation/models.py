@@ -109,6 +109,57 @@ class Condition:
 
 
 @dataclass(frozen=True)
+class SlotCandidate:
+    """LLM-extracted slot candidate before deterministic gate filtering."""
+
+    kind: str
+    parent_guess: str
+    confidence: float
+    evidence: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "parent_guess": self.parent_guess,
+            "confidence": self.confidence,
+            "evidence": self.evidence,
+        }
+
+
+@dataclass(frozen=True)
+class SlotRef:
+    """Normalized slot reference for downstream graph/orchestration stages."""
+
+    name: str
+    parent: str
+    confidence: float
+    source: str
+    status: str
+    evidence: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "parent": self.parent,
+            "confidence": self.confidence,
+            "source": self.source,
+            "status": self.status,
+            "evidence": self.evidence,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "SlotRef":
+        return cls(
+            name=str(payload.get("name") or ""),
+            parent=str(payload.get("parent") or ""),
+            confidence=float(payload.get("confidence") or 0.0),
+            source=str(payload.get("source") or ""),
+            status=str(payload.get("status") or ""),
+            evidence=str(payload.get("evidence") or ""),
+        )
+
+
+@dataclass(frozen=True)
 class ExtractedSkillSchema:
     """LLM-extracted candidate schema before deterministic normalization."""
 
@@ -119,6 +170,8 @@ class ExtractedSkillSchema:
     constraints: List[str] = field(default_factory=list)
     preconditions: List[Union[Condition, Dict[str, Any]]] = field(default_factory=list)
     postconditions: List[Union[Condition, Dict[str, Any]]] = field(default_factory=list)
+    emits_slots: List[SlotCandidate] = field(default_factory=list)
+    consumes_slots: List[SlotCandidate] = field(default_factory=list)
     confidence: Optional[float] = None
     warnings: List[str] = field(default_factory=list)
 
@@ -136,8 +189,20 @@ class SkillRepresentation:
     outputs: List[ArtifactSpec]
     preconditions: List[Condition]
     postconditions: List[Condition]
-    emits_slots: List[str] = field(default_factory=list)
-    consumes_slots: List[str] = field(default_factory=list)
+    emits_slots: List[SlotRef] = field(default_factory=list)
+    consumes_slots: List[SlotRef] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self._validate_slot_refs(self.emits_slots, field_name="emits_slots")
+        self._validate_slot_refs(self.consumes_slots, field_name="consumes_slots")
+
+    @staticmethod
+    def _validate_slot_refs(values: List[SlotRef], *, field_name: str) -> None:
+        for item in values:
+            if not isinstance(item, SlotRef):
+                raise TypeError(
+                    f"{field_name} expects list[SlotRef], got {type(item).__name__}"
+                )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -148,11 +213,90 @@ class SkillRepresentation:
             "tasks": list(self.tasks),
             "inputs": [item.to_dict() for item in self.inputs],
             "outputs": [item.to_dict() for item in self.outputs],
-            "emits_slots": list(self.emits_slots),
-            "consumes_slots": list(self.consumes_slots),
+            "emits_slots": [item.to_dict() for item in self.emits_slots],
+            "consumes_slots": [item.to_dict() for item in self.consumes_slots],
             "preconditions": [item.to_dict() for item in self.preconditions],
             "postconditions": [item.to_dict() for item in self.postconditions],
         }
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "SkillRepresentation":
+        emits_payload = payload.get("emits_slots", [])
+        consumes_payload = payload.get("consumes_slots", [])
+        if any(isinstance(item, str) for item in emits_payload):
+            raise ValueError("legacy emits_slots list[str] is not supported")
+        if any(isinstance(item, str) for item in consumes_payload):
+            raise ValueError("legacy consumes_slots list[str] is not supported")
+        return cls(
+            id=str(payload.get("id") or ""),
+            name=str(payload.get("name") or ""),
+            description=str(payload.get("description") or ""),
+            version=str(payload.get("version") or "1.0.0"),
+            tasks=[str(item) for item in payload.get("tasks", [])],
+            inputs=[
+                ParameterSpec(
+                    name=str(item.get("name") or "input"),
+                    type=str(item.get("type") or "text"),
+                    required=bool(item.get("required", True)),
+                    description=str(item.get("description") or ""),
+                    default=item.get("default"),
+                    schema_ref=item.get("schema_ref"),
+                )
+                for item in payload.get("inputs", [])
+            ],
+            outputs=[
+                ArtifactSpec(
+                    name=str(item.get("name") or "result"),
+                    type=str(item.get("type") or "unknown"),
+                    description=str(item.get("description") or ""),
+                    schema_ref=item.get("schema_ref"),
+                )
+                for item in payload.get("outputs", [])
+            ],
+            emits_slots=[SlotRef.from_dict(item) for item in emits_payload],
+            consumes_slots=[SlotRef.from_dict(item) for item in consumes_payload],
+            preconditions=[
+                Condition(
+                    type=str(item.get("type") or ""),
+                    expression=str(item.get("expression") or ""),
+                    description=str(item.get("description") or ""),
+                )
+                for item in payload.get("preconditions", [])
+            ],
+            postconditions=[
+                Condition(
+                    type=str(item.get("type") or ""),
+                    expression=str(item.get("expression") or ""),
+                    description=str(item.get("description") or ""),
+                )
+                for item in payload.get("postconditions", [])
+            ],
+        )
+
+    def emit_slot_names(self) -> List[str]:
+        return [item.name for item in self.emits_slots if item.name]
+
+    def consume_slot_names(self) -> List[str]:
+        return [item.name for item in self.consumes_slots if item.name]
+
+    def emit_slot_link_keys(self) -> List[str]:
+        return self._slot_link_keys(self.emits_slots)
+
+    def consume_slot_link_keys(self) -> List[str]:
+        return self._slot_link_keys(self.consumes_slots)
+
+    @staticmethod
+    def _slot_link_keys(slots: List[SlotRef]) -> List[str]:
+        keys: List[str] = []
+        seen: set[str] = set()
+        for slot in slots:
+            for key in (slot.name, slot.parent):
+                token = str(key or "").strip()
+                if not token or token in seen:
+                    continue
+                keys.append(token)
+                seen.add(token)
+        return keys
 
 
 @dataclass(frozen=True)
@@ -306,6 +450,20 @@ class NormalizationConfig:
             "convert_format": "convert",
             "format_conversion": "convert",
         }
+    )
+
+    # Slot extraction gates (V1 baseline).
+    slot_confidence_threshold: float = 0.80
+    slot_parent_conflict_margin: float = 0.05
+    slot_max_per_kind: int = 3
+    slot_parent_whitelist: List[str] = field(
+        default_factory=lambda: [
+            "requirements_review_findings",
+            "design_review_findings",
+            "security_findings",
+            "test_findings",
+            "delivery_brief",
+        ]
     )
 
 

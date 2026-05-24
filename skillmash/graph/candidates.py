@@ -172,10 +172,10 @@ class CandidateGenerator:
         skill_by_id = {skill.id: skill for skill in skills}
 
         for skill in skills:
-            for slot_name in getattr(skill, "emits_slots", []) or []:
+            for slot_name in skill.emit_slot_link_keys():
                 if slot_name:
                     producers_by_slot[str(slot_name)].add(skill.id)
-            for slot_name in getattr(skill, "consumes_slots", []) or []:
+            for slot_name in skill.consume_slot_link_keys():
                 if slot_name:
                     consumers_by_slot[str(slot_name)].add(skill.id)
 

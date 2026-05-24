@@ -14,7 +14,13 @@ from skillmash.graph import (
     write_graph_build_result,
 )
 from skillmash.orchestration import load_build_artifacts
-from skillmash.representation import ArtifactSpec, Condition, ParameterSpec, SkillRepresentation
+from skillmash.representation import (
+    ArtifactSpec,
+    Condition,
+    ParameterSpec,
+    SkillRepresentation,
+    SlotRef,
+)
 
 
 class AcceptingMatcher:
@@ -192,6 +198,61 @@ def test_candidate_generator_emits_slot_and_dependency_candidates() -> None:
 
     dependency_pair = by_pair[("review_api", "delivery_brief")]
     assert "depends_on" in dependency_pair.relation_hints
+
+
+def test_candidate_generator_slot_parent_fallback_links_name_mismatch() -> None:
+    producer = SkillRepresentation(
+        id="producer",
+        name="Producer",
+        description="Emit detailed review finding name.",
+        version="1.0.0",
+        tasks=["review"],
+        inputs=[ParameterSpec(name="api_spec", type="yaml")],
+        outputs=[ArtifactSpec(name="review_report", type="markdown")],
+        emits_slots=[
+            SlotRef(
+                name="api_security_findings",
+                parent="security_findings",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            )
+        ],
+        preconditions=[],
+        postconditions=[],
+    )
+    consumer = SkillRepresentation(
+        id="consumer",
+        name="Consumer",
+        description="Consume findings by broad parent slot.",
+        version="1.0.0",
+        tasks=["aggregate"],
+        inputs=[ParameterSpec(name="review_report", type="markdown")],
+        outputs=[ArtifactSpec(name="delivery_brief", type="markdown")],
+        consumes_slots=[
+            SlotRef(
+                name="security_summary",
+                parent="security_findings",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            )
+        ],
+        preconditions=[],
+        postconditions=[],
+    )
+    registry = SkillRegistryBuilder().register([producer, consumer])
+
+    candidates = CandidateGenerator().generate(registry)
+    pair = next(
+        candidate
+        for candidate in candidates
+        if candidate.source_id == "producer" and candidate.target_id == "consumer"
+    )
+
+    assert "produces" in pair.relation_hints
+    assert "consumes" in pair.relation_hints
+    assert "security_findings" in str(pair.evidence)
 
 
 def test_candidate_generator_ignores_generic_exact_io_names() -> None:
@@ -447,6 +508,57 @@ def test_graph_builder_adds_artifact_and_slot_nodes_with_structured_edges() -> N
     assert ("skill:review_api", "skill:delivery_brief", "depends_on") in edge_types
 
 
+def test_graph_builder_slot_parent_fallback_adds_parent_slot_edges() -> None:
+    producer = SkillRepresentation(
+        id="producer",
+        name="Producer",
+        description="Emit detailed finding.",
+        version="1.0.0",
+        tasks=["review"],
+        inputs=[ParameterSpec(name="api_spec", type="yaml")],
+        outputs=[ArtifactSpec(name="review_report", type="markdown")],
+        emits_slots=[
+            SlotRef(
+                name="api_security_findings",
+                parent="security_findings",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            )
+        ],
+        preconditions=[],
+        postconditions=[],
+    )
+    consumer = SkillRepresentation(
+        id="consumer",
+        name="Consumer",
+        description="Consume broad slot parent.",
+        version="1.0.0",
+        tasks=["aggregate"],
+        inputs=[ParameterSpec(name="review_report", type="markdown")],
+        outputs=[ArtifactSpec(name="delivery_brief", type="markdown")],
+        consumes_slots=[
+            SlotRef(
+                name="security_summary",
+                parent="security_findings",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            )
+        ],
+        preconditions=[],
+        postconditions=[],
+    )
+
+    result = GraphBuilder(matcher=AcceptingMatcher()).build([producer, consumer])
+    edge_types = {(edge.source, edge.target, edge.type) for edge in result.graph.edges}
+
+    assert ("skill:producer", "slot:api_security_findings", "produces") in edge_types
+    assert ("skill:producer", "slot:security_findings", "produces") in edge_types
+    assert ("slot:security_summary", "skill:consumer", "consumes") in edge_types
+    assert ("slot:security_findings", "skill:consumer", "consumes") in edge_types
+
+
 def test_index_builder_tracks_slot_and_aggregator_indexes() -> None:
     result = GraphBuilder(matcher=AcceptingMatcher()).build(
         [_review_api_skill(), _review_ui_skill(), _delivery_brief_skill()]
@@ -575,7 +687,15 @@ def _review_api_skill() -> SkillRepresentation:
         tasks=["review", "audit"],
         inputs=[ParameterSpec(name="api_spec", type="yaml")],
         outputs=[ArtifactSpec(name="review_report", type="markdown")],
-        emits_slots=["security_findings"],
+        emits_slots=[
+            SlotRef(
+                name="security_findings",
+                parent="security_findings",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            )
+        ],
         preconditions=[],
         postconditions=[],
     )
@@ -590,7 +710,15 @@ def _review_ui_skill() -> SkillRepresentation:
         tasks=["review", "analyze"],
         inputs=[ParameterSpec(name="ui_prototype", type="image")],
         outputs=[ArtifactSpec(name="review_report", type="markdown")],
-        emits_slots=["design_review_findings"],
+        emits_slots=[
+            SlotRef(
+                name="design_review_findings",
+                parent="design_review_findings",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            )
+        ],
         preconditions=[],
         postconditions=[],
     )
@@ -605,8 +733,31 @@ def _delivery_brief_skill() -> SkillRepresentation:
         tasks=["synthesize", "orchestrate"],
         inputs=[ParameterSpec(name="constraints", type="text", required=False)],
         outputs=[ArtifactSpec(name="delivery_brief", type="markdown")],
-        consumes_slots=["security_findings", "design_review_findings"],
-        emits_slots=["delivery_brief"],
+        consumes_slots=[
+            SlotRef(
+                name="security_findings",
+                parent="security_findings",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            ),
+            SlotRef(
+                name="design_review_findings",
+                parent="design_review_findings",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            ),
+        ],
+        emits_slots=[
+            SlotRef(
+                name="delivery_brief",
+                parent="delivery_brief",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            )
+        ],
         preconditions=[
             Condition(type="depends_on_skill", expression="review_api"),
         ],

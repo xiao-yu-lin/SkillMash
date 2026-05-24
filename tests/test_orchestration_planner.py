@@ -10,6 +10,7 @@ from skillmash.orchestration import (
     load_build_artifacts,
 )
 from skillmash.orchestration.planning.orchestrator import (
+    _augment_with_structural_incomplete_plans,
     _annotate_plan_execution_feasibility,
 )
 from skillmash.representation import (
@@ -17,6 +18,7 @@ from skillmash.representation import (
     Condition,
     ParameterSpec,
     SkillRepresentation,
+    SlotRef,
 )
 
 
@@ -104,6 +106,20 @@ class IncompatibleSubstituteMatcher:
         ]
 
 
+class SimilarOnlyMatcher:
+    def match(self, registry, candidates):
+        return [
+            LLMMatch(
+                source_id="review_api_pro",
+                target_id="review_api",
+                relation_type="similar_to",
+                confidence=0.9,
+                method="test_matcher",
+                accepted=True,
+            )
+        ]
+
+
 class EmptyMatcher:
     def match(self, registry, candidates):
         return []
@@ -113,7 +129,9 @@ def test_planning_config_exposes_entry_width_and_conservative_flags() -> None:
     cfg = PlanningConfig()
     assert hasattr(cfg, "max_entry_skills")
     assert hasattr(cfg, "conservative_reject")
+    assert hasattr(cfg, "allow_similar_slot_substitute")
     assert cfg.conservative_reject is True
+    assert cfg.allow_similar_slot_substitute is False
 
 
 def test_orchestrator_uses_user_artifacts_as_entry(tmp_path: Path) -> None:
@@ -279,6 +297,65 @@ def test_orchestrator_records_feedback_for_incompatible_substitute(tmp_path: Pat
     assert feedback_path.exists()
     lines = feedback_path.read_text(encoding="utf-8").splitlines()
     assert any("slot_incompatible_signature" in line for line in lines)
+
+
+def test_orchestrator_does_not_use_similar_for_slot_substitute_by_default(
+    tmp_path: Path,
+) -> None:
+    result = GraphBuilder(matcher=SimilarOnlyMatcher()).build(
+        [_make_api_skill(), _review_api_skill(), _review_api_pro_skill()]
+    )
+    write_graph_build_result(result, tmp_path)
+
+    planner = SkillOrchestrator(
+        load_build_artifacts(tmp_path),
+        llm_client=FakeGroundingClient(
+            {
+                "available_artifacts": [],
+                "goal_terms": ["generate", "review", "api", "spec"],
+            }
+        ),
+        max_plans=5,
+    )
+    plan = planner.plan("Generate an api spec and review it")
+
+    assert any(
+        any(step.get("skill_id") == "review_api" for step in candidate.get("steps", []))
+        for candidate in plan["plans"]
+    )
+    assert all(
+        not slot.get("similar_candidates")
+        for candidate in plan["plans"]
+        for slot in candidate.get("slot_candidates", [])
+    )
+
+
+def test_orchestrator_can_enable_similar_for_slot_substitute(
+    tmp_path: Path,
+) -> None:
+    result = GraphBuilder(matcher=SimilarOnlyMatcher()).build(
+        [_make_api_skill(), _review_api_skill(), _review_api_pro_skill()]
+    )
+    write_graph_build_result(result, tmp_path)
+
+    planner = SkillOrchestrator(
+        load_build_artifacts(tmp_path),
+        llm_client=FakeGroundingClient(
+            {
+                "available_artifacts": [],
+                "goal_terms": ["generate", "review", "api", "spec"],
+            }
+        ),
+        planning_config=PlanningConfig(allow_similar_slot_substitute=True),
+        max_plans=5,
+    )
+    plan = planner.plan("Generate an api spec and review it")
+
+    assert any(
+        slot.get("similar_candidates")
+        for candidate in plan["plans"]
+        for slot in candidate.get("slot_candidates", [])
+    )
 
 
 def test_orchestrator_connects_parallel_reviews_to_aggregator_without_direct_can_feed(
@@ -474,6 +551,73 @@ def test_reliability_first_records_strategy_in_decision(tmp_path: Path) -> None:
     assert response["decision"]["strategy"] == "reliability_first"
 
 
+def test_augment_with_structural_incomplete_plans_prefers_complex_query() -> None:
+    validated = [
+        {
+            "status": "ready",
+            "goal_score": 9.0,
+            "edge_confidence": 1.0,
+            "steps": [{"skill_id": "prd-review-team"}],
+            "plan_classification": "executable",
+            "missing_inputs": [],
+        }
+    ]
+    candidates = validated + [
+        {
+            "status": "needs_input",
+            "goal_score": 8.0,
+            "edge_confidence": 1.0,
+            "steps": [
+                {"skill_id": "prd-review-team"},
+                {"skill_id": "api-design-review-team"},
+                {"skill_id": "wisedev-team"},
+            ],
+            "plan_classification": "structurally_valid_but_incomplete",
+            "missing_inputs": [{"skill_id": "wisedev-team", "name": "x", "type": "text"}],
+        }
+    ]
+    output = _augment_with_structural_incomplete_plans(
+        validated,
+        candidates,
+        query="这是我们的 PRD、API 草案和 UI 原型。请评估风险并给上线建议",
+        grounded_query={"goal_terms": ["review", "audit"]},
+        top_k=3,
+    )
+    assert len(output) > len(validated)
+    assert any(len(plan.get("steps", [])) >= 2 for plan in output)
+
+
+def test_augment_with_structural_incomplete_plans_noop_for_simple_query() -> None:
+    validated = [
+        {
+            "status": "ready",
+            "goal_score": 9.0,
+            "edge_confidence": 1.0,
+            "steps": [{"skill_id": "review_api"}],
+            "plan_classification": "executable",
+            "missing_inputs": [],
+        }
+    ]
+    candidates = validated + [
+        {
+            "status": "needs_input",
+            "goal_score": 8.0,
+            "edge_confidence": 1.0,
+            "steps": [{"skill_id": "a"}, {"skill_id": "b"}],
+            "plan_classification": "structurally_valid_but_incomplete",
+            "missing_inputs": [{"skill_id": "b", "name": "x", "type": "text"}],
+        }
+    ]
+    output = _augment_with_structural_incomplete_plans(
+        validated,
+        candidates,
+        query="review api",
+        grounded_query={"goal_terms": ["review", "api"]},
+        top_k=3,
+    )
+    assert output == validated
+
+
 def _make_api_skill() -> SkillRepresentation:
     return SkillRepresentation(
         id="make_api",
@@ -576,7 +720,15 @@ def _review_prd_skill() -> SkillRepresentation:
             ArtifactSpec(name="recommendation", type="text"),
             ArtifactSpec(name="blocking", type="bool"),
         ],
-        emits_slots=["prd_findings"],
+        emits_slots=[
+            SlotRef(
+                name="prd_findings",
+                parent="requirements_review_findings",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            )
+        ],
         preconditions=[],
         postconditions=[],
     )
@@ -597,7 +749,15 @@ def _api_review_findings_skill() -> SkillRepresentation:
             ArtifactSpec(name="recommendation", type="text"),
             ArtifactSpec(name="blocking", type="bool"),
         ],
-        emits_slots=["security_findings"],
+        emits_slots=[
+            SlotRef(
+                name="security_findings",
+                parent="security_findings",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            )
+        ],
         preconditions=[],
         postconditions=[],
     )
@@ -618,7 +778,15 @@ def _ui_review_findings_skill() -> SkillRepresentation:
             ArtifactSpec(name="recommendation", type="text"),
             ArtifactSpec(name="blocking", type="bool"),
         ],
-        emits_slots=["design_review_findings"],
+        emits_slots=[
+            SlotRef(
+                name="design_review_findings",
+                parent="design_review_findings",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            )
+        ],
         preconditions=[],
         postconditions=[],
     )
@@ -633,8 +801,38 @@ def _delivery_brief_from_findings_skill() -> SkillRepresentation:
         tasks=["synthesize", "orchestrate"],
         inputs=[],
         outputs=[ArtifactSpec(name="delivery_brief", type="markdown")],
-        consumes_slots=["prd_findings", "security_findings", "design_review_findings"],
-        emits_slots=["delivery_brief"],
+        consumes_slots=[
+            SlotRef(
+                name="prd_findings",
+                parent="requirements_review_findings",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            ),
+            SlotRef(
+                name="security_findings",
+                parent="security_findings",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            ),
+            SlotRef(
+                name="design_review_findings",
+                parent="design_review_findings",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            ),
+        ],
+        emits_slots=[
+            SlotRef(
+                name="delivery_brief",
+                parent="delivery_brief",
+                confidence=0.95,
+                source="test",
+                status="accepted",
+            )
+        ],
         preconditions=[Condition(type="depends_on_skill", expression="review_api_findings")],
         postconditions=[],
     )

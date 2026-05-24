@@ -38,6 +38,8 @@ from skillmash.representation.models import (
     RepresentationExtractionResult,
     SkillFolder,
     SkillRepresentation,
+    SlotCandidate,
+    SlotRef,
 )
 from skillmash.representation.normalizer import SkillRepresentationNormalizer
 from skillmash.representation.pipeline import RepresentationExtractor
@@ -93,6 +95,8 @@ __all__ = [
     "RepresentationExtractionResult",
     "SkillFolder",
     "SkillRepresentation",
+    "SlotCandidate",
+    "SlotRef",
     # Extractor
     "OpenAICompatibleSchemaExtractor",
     "schema_from_llm_payload",

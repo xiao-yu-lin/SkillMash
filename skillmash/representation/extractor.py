@@ -14,6 +14,7 @@ from skillmash.representation.models import (
     ExtractedSkillSchema,
     ParameterSpec,
     RawSkillManifest,
+    SlotCandidate,
 )
 
 
@@ -82,6 +83,8 @@ def schema_from_llm_payload(payload: Dict[str, Any]) -> ExtractedSkillSchema:
         tasks=[str(item) for item in payload.get("tasks", [])],
         inputs=[_parameter_from_payload(item) for item in payload.get("inputs", [])],
         outputs=[_artifact_from_payload(item) for item in payload.get("outputs", [])],
+        emits_slots=[_slot_candidate_from_payload(item) for item in payload.get("emits_slots", [])],
+        consumes_slots=[_slot_candidate_from_payload(item) for item in payload.get("consumes_slots", [])],
         constraints=[str(item) for item in payload.get("constraints", [])],
         confidence=payload.get("confidence"),
         warnings=[str(item) for item in payload.get("warnings", [])],
@@ -111,6 +114,17 @@ def _combined_type_from_payload(payload: Dict[str, Any], default: str) -> str:
     return str(payload.get("format") or payload.get("type") or default)
 
 
+def _slot_candidate_from_payload(payload: Dict[str, Any]) -> SlotCandidate:
+    if not isinstance(payload, dict):
+        payload = {}
+    return SlotCandidate(
+        kind=str(payload.get("kind") or ""),
+        parent_guess=str(payload.get("parent_guess") or ""),
+        confidence=float(payload.get("confidence") or 0.0),
+        evidence=str(payload.get("evidence") or ""),
+    )
+
+
 def _build_llm_context(manifest: RawSkillManifest) -> Dict[str, Any]:
     return {
         "source": {
@@ -131,6 +145,8 @@ Required JSON object fields:
 - inputs: array of {name, type, required, description, optional schema_ref}
 - outputs: array of {name, type, description, optional schema_ref}
 - constraints: array of strings
+- emits_slots: array of {kind, parent_guess, confidence, evidence}
+- consumes_slots: array of {kind, parent_guess, confidence, evidence}
 - confidence: number between 0 and 1
 - warnings: array of strings
 
@@ -152,6 +168,13 @@ Use input and output names as canonical semantic vocab terms for graph linking. 
 short noun roles such as query, topic, url, paper, summary, report, table,
 image, code, file, path, or result when they fit. Put details in description
 instead of making highly specific parameter names.
+
+You must always output emits_slots and consumes_slots, even when empty.
+Each slot candidate kind must be snake_case.
+Each slot candidate must include concise evidence quoted from source content.
+Use one of these parent_guess values when possible:
+requirements_review_findings, design_review_findings, security_findings,
+test_findings, delivery_brief.
 
 Do not emit duplicate inputs for the same caller-provided value. Omit logging,
 analytics, telemetry, statistics, tracing, or original-copy fields unless the

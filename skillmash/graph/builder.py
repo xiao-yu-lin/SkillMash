@@ -141,8 +141,9 @@ class SkillGraphBuilder:
         skill,
     ) -> None:
         skill_node_id = f"skill:{skill.id}"
-        emits_slots = [slot for slot in getattr(skill, "emits_slots", []) if slot]
-        consumes_slots = [slot for slot in getattr(skill, "consumes_slots", []) if slot]
+        emits_slots = list(getattr(skill, "emit_slot_link_keys", lambda: [])())
+        consumes_slots = list(getattr(skill, "consume_slot_link_keys", lambda: [])())
+        consume_ref_count = len(getattr(skill, "consumes_slots", []) or [])
 
         for slot_name in emits_slots:
             slot_id = _slot_node_id(slot_name)
@@ -165,7 +166,7 @@ class SkillGraphBuilder:
                 ),
             )
 
-        consume_edge_type = "aggregates" if len(consumes_slots) > 1 else "consumes"
+        consume_edge_type = "aggregates" if consume_ref_count > 1 else "consumes"
         for slot_name in consumes_slots:
             slot_id = _slot_node_id(slot_name)
             self._add_node(

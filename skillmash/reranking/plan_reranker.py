@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Protocol
 
 from skillmash.representation.llm import LLMConfig, create_llm_client
+
+logger = logging.getLogger(__name__)
 
 
 class RerankClient(Protocol):
@@ -78,8 +81,24 @@ class PlanReranker:
         top_k = max(1, int(top_k))
         top_m = max(1, int(top_m))
         plans = list(planning_result.get("plans", []))
-        sorted_indexes = _deterministic_plan_indexes(plans)
+        prefer_multi_step = _prefer_multi_step_plans(
+            str(planning_result.get("query") or ""),
+            planning_result.get("grounded_query", {}),
+        )
+        sorted_indexes = _deterministic_plan_indexes(
+            plans,
+            query=str(planning_result.get("query") or ""),
+            grounded_query=planning_result.get("grounded_query", {}),
+        )
         pool_indexes = sorted_indexes[:top_m]
+        logger.debug(
+            "rerank start: plans=%s top_m=%s top_k=%s prefer_multi_step=%s pool_indexes=%s",
+            len(plans),
+            top_m,
+            top_k,
+            prefer_multi_step,
+            pool_indexes,
+        )
 
         payload = {
             "query": planning_result.get("query", ""),
@@ -103,17 +122,40 @@ class PlanReranker:
         except Exception as exc:  # pragma: no cover - covered by behavior assertions
             fallback_used = True
             fallback_reason = str(exc)
+            logger.debug("rerank llm failed, fallback enabled: %s", fallback_reason)
 
         if len(recommended) < top_k:
             fallback_used = True
             if not fallback_reason:
                 fallback_reason = "llm_result_insufficient"
+            logger.debug(
+                "rerank backfill needed: recommended=%s top_k=%s reason=%s",
+                len(recommended),
+                top_k,
+                fallback_reason,
+            )
             recommended = _backfill_recommendations(
                 recommended,
                 plans,
                 sorted_indexes,
                 top_k=top_k,
             )
+        recommended = _ensure_multi_step_coverage(
+            recommended,
+            plans,
+            sorted_indexes,
+            top_k=top_k,
+            prefer_multi_step=prefer_multi_step,
+        )
+        logger.debug(
+            "rerank done: ranking_mode=%s recommended_indexes=%s",
+            "fallback" if fallback_used else "llm",
+            [
+                item.get("source_plan_index")
+                for item in recommended
+                if isinstance(item.get("source_plan_index"), int)
+            ],
+        )
 
         result = dict(planning_result)
         if not include_candidates:
@@ -266,18 +308,136 @@ def _recommendation_from_candidate(
     }
 
 
-def _deterministic_plan_indexes(plans: list[dict[str, Any]]) -> list[int]:
+def _ensure_multi_step_coverage(
+    recommended: list[dict[str, Any]],
+    plans: list[dict[str, Any]],
+    sorted_indexes: list[int],
+    *,
+    top_k: int,
+    prefer_multi_step: bool,
+) -> list[dict[str, Any]]:
+    if not prefer_multi_step or not recommended:
+        return recommended[:top_k]
+    target_multi = 2 if top_k >= 3 else 1
+
+    def _step_count(item: dict[str, Any]) -> int:
+        return len(item.get("skill_order") or [])
+
+    multi_count = sum(1 for item in recommended if _step_count(item) >= 2)
+    if multi_count >= target_multi:
+        return recommended[:top_k]
+
+    selected_indexes = {
+        int(item.get("source_plan_index"))
+        for item in recommended
+        if isinstance(item.get("source_plan_index"), int)
+    }
+    candidate_multi_indexes = [
+        idx
+        for idx in sorted_indexes
+        if idx not in selected_indexes
+        and len(plans[idx - 1].get("steps") or []) >= 2
+    ]
+    if not candidate_multi_indexes:
+        return recommended[:top_k]
+
+    output = list(recommended[:top_k])
+    while multi_count < target_multi and candidate_multi_indexes:
+        replace_at = None
+        for i in range(len(output) - 1, -1, -1):
+            if _step_count(output[i]) < 2:
+                replace_at = i
+                break
+        if replace_at is None:
+            break
+        incoming_index = candidate_multi_indexes.pop(0)
+        output[replace_at] = _recommendation_from_candidate(
+            plans[incoming_index - 1],
+            incoming_index,
+            title=f"Candidate plan {incoming_index}",
+            reason="deterministic diversity fallback",
+        )
+        multi_count = sum(1 for item in output if _step_count(item) >= 2)
+    return output[:top_k]
+
+
+def _deterministic_plan_indexes(
+    plans: list[dict[str, Any]],
+    *,
+    query: str = "",
+    grounded_query: dict[str, Any] | None = None,
+) -> list[int]:
+    prefer_multi_step = _prefer_multi_step_plans(query, grounded_query or {})
     scored = []
     for index, plan in enumerate(plans, start=1):
-        scored.append(
-            (
-                plan.get("status") != "ready",
-                len(plan.get("missing_inputs") or []),
-                -int(plan.get("consumed_user_artifacts") or 0),
-                len(plan.get("steps") or []),
-                -float(plan.get("goal_score") or 0.0),
-                -float(plan.get("edge_confidence") or 0.0),
+        step_count = len(plan.get("steps") or [])
+        goal_score = float(plan.get("goal_score") or 0.0)
+        edge_confidence = float(plan.get("edge_confidence") or 0.0)
+        consumed_user_artifacts = int(plan.get("consumed_user_artifacts") or 0)
+        multi_step_penalty = 1 if prefer_multi_step and step_count < 2 else 0
+        status_rank = 1 if plan.get("status") != "ready" else 0
+        if (
+            prefer_multi_step
+            and step_count >= 2
+            and plan.get("plan_classification") == "structurally_valid_but_incomplete"
+        ):
+            status_rank = 0
+        missing_count = len(plan.get("missing_inputs") or [])
+
+        if prefer_multi_step:
+            sort_key = (
+                status_rank,
+                multi_step_penalty,
+                missing_count,
+                -goal_score,
+                -edge_confidence,
+                -consumed_user_artifacts,
+                step_count,
                 index,
             )
+        else:
+            sort_key = (
+                status_rank,
+                missing_count,
+                -goal_score,
+                -edge_confidence,
+                -consumed_user_artifacts,
+                step_count,
+                index,
+            )
+        scored.append(
+            sort_key
         )
     return [item[-1] for item in sorted(scored)]
+
+
+def _prefer_multi_step_plans(query: str, grounded_query: dict[str, Any]) -> bool:
+    query_text = str(query or "").lower()
+    goal_terms = {
+        str(item).lower()
+        for item in grounded_query.get("goal_terms", [])
+        if str(item).strip()
+    }
+    if len(goal_terms) >= 4:
+        return True
+
+    trigger_terms = {
+        "risk",
+        "review",
+        "audit",
+        "security",
+        "design",
+        "test",
+        "prd",
+        "api",
+        "ui",
+        "上线",
+        "风险",
+        "评审",
+        "审计",
+        "安全",
+        "测试",
+        "建议",
+    }
+    matched = sum(1 for token in trigger_terms if token in query_text)
+    return matched >= 2

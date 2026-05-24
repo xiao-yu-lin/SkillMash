@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -26,6 +27,8 @@ from skillmash.orchestration.strategy.interfaces import PruneContext
 from skillmash.orchestration.validation import default_policy, hard_filter_plans
 from skillmash.reranking import PlanReranker
 from skillmash.representation.llm import LLMConfig, create_llm_client
+
+logger = logging.getLogger(__name__)
 
 
 class PlanRanker(Protocol):
@@ -62,6 +65,7 @@ class SkillOrchestrator:
         top_k: int | None = None,
         include_candidates: bool | None = None,
         conservative_reject: bool | None = None,
+        allow_similar_slot_substitute: bool | None = None,
     ) -> None:
         self.artifacts = artifacts
         self.manifest_defaults = _planning_defaults_from_manifest(artifacts.manifest)
@@ -77,6 +81,7 @@ class SkillOrchestrator:
             top_k=top_k,
             include_candidates=include_candidates,
             conservative_reject=conservative_reject,
+            allow_similar_slot_substitute=allow_similar_slot_substitute,
         )
 
         self.min_edge_confidence = clamp(self.config.min_edge_confidence)
@@ -131,6 +136,9 @@ class SkillOrchestrator:
             conservative_reject=planning_config.conservative_reject
             if planning_config
             else None,
+            allow_similar_slot_substitute=planning_config.allow_similar_slot_substitute
+            if planning_config
+            else None,
         )
         grounded = self.ground_query(query)
         can_feed_edges = [
@@ -139,6 +147,12 @@ class SkillOrchestrator:
             if float(edge.get("confidence") or 0.0)
             >= clamp(config.min_edge_confidence)
         ]
+        logger.debug(
+            "plan start: query=%r min_edge_confidence=%.3f can_feed_edges=%s",
+            query,
+            clamp(config.min_edge_confidence),
+            len(can_feed_edges),
+        )
         outgoing_edges = build_outgoing_edges(can_feed_edges)
         plans = search_plans(
             artifacts=self.artifacts,
@@ -162,6 +176,11 @@ class SkillOrchestrator:
                 -float(plan.get("edge_confidence") or 0.0),
             ),
         )[: max(1, config.max_plans)]
+        logger.debug(
+            "search plans: raw=%s sliced=%s",
+            len(plans),
+            len(candidate_plans),
+        )
         candidate_plans = _append_mixed_graph_candidates(
             candidate_plans,
             artifacts=self.artifacts,
@@ -171,7 +190,11 @@ class SkillOrchestrator:
             max_plans=max(1, config.max_plans),
         )
 
-        candidate_plans = build_slot_groups(candidate_plans, self.all_relation_edges)
+        candidate_plans = build_slot_groups(
+            candidate_plans,
+            self.all_relation_edges,
+            allow_similar=config.allow_similar_slot_substitute,
+        )
         candidate_plans = [
             _optimize_plan_slots(
                 plan,
@@ -181,9 +204,11 @@ class SkillOrchestrator:
                 grounded=grounded,
                 feedback_path=config.relation_feedback_path,
                 min_edge_confidence=clamp(config.min_edge_confidence),
+                allow_similar=config.allow_similar_slot_substitute,
             )
             for plan in candidate_plans
         ]
+        logger.debug("post optimization plans=%s", len(candidate_plans))
         candidate_plans = [
             _annotate_plan_execution_feasibility(
                 plan,
@@ -198,8 +223,22 @@ class SkillOrchestrator:
             candidate_plans,
             policy=policy,
         )
+        ranking_pool = _augment_with_structural_incomplete_plans(
+            validated_plans,
+            candidate_plans,
+            query=query,
+            grounded_query=grounded.to_dict(),
+            top_k=max(1, config.top_k),
+        )
+        logger.debug(
+            "hard filter: candidate=%s validated=%s ranking_pool=%s fail_counts=%s",
+            len(candidate_plans),
+            len(validated_plans),
+            len(ranking_pool),
+            fail_counts,
+        )
 
-        if not validated_plans and config.conservative_reject:
+        if not ranking_pool and config.conservative_reject:
             return {
                 "query": query,
                 "build_dir": str(self.artifacts.build_dir),
@@ -224,7 +263,7 @@ class SkillOrchestrator:
             runtime_constraints={},
         )
         ranked_validated = sorted(
-            validated_plans,
+            ranking_pool,
             key=lambda plan: (
                 -strategy.rank_score(plan, context),
                 len(plan.get("steps") or []),
@@ -250,10 +289,16 @@ class SkillOrchestrator:
         reranked["decision"] = {
             "mode": "validated",
             "strategy": strategy.name,
-            "validated_count": len(ranked_validated),
+            "validated_count": len(validated_plans),
+            "ranking_pool_count": len(ranked_validated),
             "candidate_count": len(candidate_plans),
             "fail_code_counts": fail_counts,
         }
+        logger.debug(
+            "rerank result: mode=%s recommended=%s",
+            reranked.get("ranking_mode"),
+            len(reranked.get("recommended_plans", [])),
+        )
         return reranked
 
     def ground_query(self, query: str) -> GroundedQuery:
@@ -276,6 +321,7 @@ def _resolve_config(
     top_k: int | None,
     include_candidates: bool | None,
     conservative_reject: bool | None,
+    allow_similar_slot_substitute: bool | None,
 ) -> PlanningConfig:
     base_config = base or PlanningConfig()
     return PlanningConfig(
@@ -304,6 +350,11 @@ def _resolve_config(
             if conservative_reject is not None
             else base_config.conservative_reject
         ),
+        allow_similar_slot_substitute=(
+            bool(allow_similar_slot_substitute)
+            if allow_similar_slot_substitute is not None
+            else base_config.allow_similar_slot_substitute
+        ),
         relation_feedback_path=base_config.relation_feedback_path,
         relation_feedback_window_days=base_config.relation_feedback_window_days,
     )
@@ -331,6 +382,12 @@ def _planning_defaults_from_manifest(manifest: dict[str, Any]) -> PlanningConfig
         conservative_reject=bool(
             defaults.get("conservative_reject", PlanningConfig.conservative_reject)
         ),
+        allow_similar_slot_substitute=bool(
+            defaults.get(
+                "allow_similar_slot_substitute",
+                PlanningConfig.allow_similar_slot_substitute,
+            )
+        ),
         relation_feedback_path=str(
             defaults.get(
                 "relation_feedback_path", PlanningConfig.relation_feedback_path
@@ -354,11 +411,12 @@ def _optimize_plan_slots(
     grounded: GroundedQuery,
     feedback_path: str,
     min_edge_confidence: float,
+    allow_similar: bool,
 ) -> dict[str, Any]:
     steps = [dict(step) for step in plan.get("steps", [])]
     if not steps:
         return plan
-    relation_views = _relation_views(graph_edges)
+    relation_views = _relation_views(graph_edges, allow_similar=allow_similar)
     available = {artifact.key for artifact in grounded.available_artifacts}
     selected_ids = [str(step.get("skill_id") or "") for step in steps]
     slot_candidates: list[dict[str, Any]] = []
@@ -482,7 +540,11 @@ def replace_step_for_stage(step: dict[str, Any]):
     return _Step(step)
 
 
-def _relation_views(graph_edges: list[dict[str, Any]]) -> dict[str, Any]:
+def _relation_views(
+    graph_edges: list[dict[str, Any]],
+    *,
+    allow_similar: bool,
+) -> dict[str, Any]:
     substitute_by_target: dict[str, list[tuple[str, str]]] = {}
     similar_by_skill: dict[str, list[tuple[str, str]]] = {}
     for edge in graph_edges:
@@ -495,7 +557,7 @@ def _relation_views(graph_edges: list[dict[str, Any]]) -> dict[str, Any]:
             substitute_by_target.setdefault(target, []).append(
                 (source, "substitute_for")
             )
-        elif edge_type == "similar_to":
+        elif allow_similar and edge_type == "similar_to":
             similar_by_skill.setdefault(source, []).append((target, "similar_to"))
             similar_by_skill.setdefault(target, []).append((source, "similar_to"))
     for key in list(substitute_by_target):
@@ -1128,6 +1190,101 @@ def _remap_plan_edges(
         item["target_id"] = target
         remapped.append(item)
     return remapped
+
+
+def _augment_with_structural_incomplete_plans(
+    validated_plans: list[dict[str, Any]],
+    candidate_plans: list[dict[str, Any]],
+    *,
+    query: str,
+    grounded_query: dict[str, Any],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    if not _prefer_multi_step_for_complex_query(query, grounded_query):
+        return validated_plans
+    target = max(top_k * 3, 12)
+    if len(validated_plans) >= target:
+        return validated_plans
+
+    existing_signatures = {
+        tuple(
+            str(step.get("skill_id") or "")
+            for step in plan.get("steps", [])
+            if step.get("skill_id")
+        )
+        for plan in validated_plans
+    }
+    augment_candidates: list[dict[str, Any]] = []
+    for plan in candidate_plans:
+        signature = tuple(
+            str(step.get("skill_id") or "")
+            for step in plan.get("steps", [])
+            if step.get("skill_id")
+        )
+        if not signature or signature in existing_signatures:
+            continue
+        if len(signature) < 2:
+            continue
+        if plan.get("status") != "needs_input":
+            continue
+        if plan.get("plan_classification") != "structurally_valid_but_incomplete":
+            continue
+        augment_candidates.append(plan)
+
+    augment_candidates.sort(
+        key=lambda plan: (
+            len(plan.get("missing_inputs") or []),
+            -float(plan.get("goal_score") or 0.0),
+            -float(plan.get("edge_confidence") or 0.0),
+            -len(plan.get("steps") or []),
+        )
+    )
+    output = list(validated_plans)
+    for plan in augment_candidates:
+        output.append(plan)
+        if len(output) >= target:
+            break
+    return output
+
+
+def _prefer_multi_step_for_complex_query(
+    query: str,
+    grounded_query: dict[str, Any],
+) -> bool:
+    query_text = str(query or "").lower()
+    goal_terms = {
+        str(item).lower()
+        for item in grounded_query.get("goal_terms", [])
+        if str(item).strip()
+    }
+    if len(goal_terms) >= 6:
+        return True
+
+    artifact_terms = {
+        "prd",
+        "api",
+        "ui",
+        "原型",
+    }
+    risk_terms = {
+        "risk",
+        "security",
+        "test",
+        "design",
+        "technical",
+        "product",
+        "上线",
+        "建议",
+        "风险",
+        "安全",
+        "测试",
+        "设计",
+        "技术",
+        "产品",
+    }
+    has_artifact_dim = any(token in query_text for token in artifact_terms)
+    matched_risk_dims = sum(1 for token in risk_terms if token in query_text)
+    return has_artifact_dim and matched_risk_dims >= 2
 
 
 def _record_relation_feedback(

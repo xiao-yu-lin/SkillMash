@@ -23,7 +23,7 @@ from skillmash.representation.models import SkillRepresentation
 
 DEFAULT_THRESHOLDS = {
     "can_feed": 0.7,
-    "similar_to": 0.0,
+    "similar_to": 0.65,
     "substitute_for": 0.0,
 }
 

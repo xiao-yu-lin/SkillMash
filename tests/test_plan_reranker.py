@@ -168,3 +168,101 @@ def test_plan_reranker_backfills_when_llm_returns_too_few() -> None:
     assert reranked["ranking_mode"] == "fallback"
     assert [item["source_plan_index"] for item in reranked["recommended_plans"][:1]] == [2]
     assert len(reranked["recommended_plans"]) == 3
+
+
+def test_plan_reranker_fallback_prefers_high_goal_score_over_shorter_path() -> None:
+    planning = {
+        "query": "simple request",
+        "grounded_query": {"goal_terms": ["review"]},
+        "plans": [
+            {
+                "status": "ready",
+                "goal_score": 9.0,
+                "edge_confidence": 0.7,
+                "steps": [{"skill_id": "a"}, {"skill_id": "b"}, {"skill_id": "c"}],
+                "missing_inputs": [],
+            },
+            {
+                "status": "ready",
+                "goal_score": 7.0,
+                "edge_confidence": 0.9,
+                "steps": [{"skill_id": "x"}],
+                "missing_inputs": [],
+            },
+        ],
+    }
+    reranked = PlanReranker(llm_client=InvalidJsonRerankClient()).rerank(
+        planning,
+        top_k=1,
+    )
+
+    assert reranked["recommended_plans"][0]["source_plan_index"] == 1
+
+
+def test_plan_reranker_fallback_prefers_multi_step_for_complex_review_query() -> None:
+    planning = {
+        "query": "这是PRD API UI评审与风险分析上线建议",
+        "grounded_query": {"goal_terms": ["review", "security", "design", "test"]},
+        "plans": [
+            {
+                "status": "ready",
+                "goal_score": 10.0,
+                "edge_confidence": 0.8,
+                "steps": [{"skill_id": "single-review"}],
+                "missing_inputs": [],
+            },
+            {
+                "status": "ready",
+                "goal_score": 10.0,
+                "edge_confidence": 0.8,
+                "steps": [
+                    {"skill_id": "prd-review"},
+                    {"skill_id": "api-review"},
+                    {"skill_id": "security-review"},
+                ],
+                "missing_inputs": [],
+            },
+        ],
+    }
+    reranked = PlanReranker(llm_client=InvalidJsonRerankClient()).rerank(
+        planning,
+        top_k=1,
+    )
+
+    assert reranked["recommended_plans"][0]["source_plan_index"] == 2
+
+
+def test_plan_reranker_fallback_can_prioritize_structural_multi_step_over_single_ready() -> None:
+    planning = {
+        "query": "这是我们的PRD API UI评审和风险分析建议",
+        "grounded_query": {"goal_terms": ["review", "security", "design", "test", "audit", "report"]},
+        "plans": [
+            {
+                "status": "ready",
+                "goal_score": 20.0,
+                "edge_confidence": 1.0,
+                "steps": [{"skill_id": "prd-review-team"}],
+                "missing_inputs": [],
+                "plan_classification": "executable",
+            },
+            {
+                "status": "needs_input",
+                "goal_score": 29.0,
+                "edge_confidence": 0.9,
+                "steps": [
+                    {"skill_id": "wisedev-team"},
+                    {"skill_id": "prd-review-team"},
+                ],
+                "missing_inputs": [
+                    {"skill_id": "wisedev-team", "name": "brief", "type": "text"}
+                ],
+                "plan_classification": "structurally_valid_but_incomplete",
+            },
+        ],
+    }
+    reranked = PlanReranker(llm_client=InvalidJsonRerankClient()).rerank(
+        planning,
+        top_k=1,
+    )
+
+    assert reranked["recommended_plans"][0]["source_plan_index"] == 2

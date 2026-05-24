@@ -226,7 +226,7 @@ class BuildManifest:
     thresholds: Dict[str, float] = field(
         default_factory=lambda: {
             "can_feed": 0.7,
-            "similar_to": 0.0,
+            "similar_to": 0.65,
             "substitute_for": 0.0,
         }
     )
@@ -241,6 +241,7 @@ class BuildManifest:
             "top_k": 3,
             "include_candidates": True,
             "conservative_reject": True,
+            "allow_similar_slot_substitute": False,
             "relation_feedback_path": ".skillmash/runtime/relation_feedback.jsonl",
             "relation_feedback_window_days": 30,
         }

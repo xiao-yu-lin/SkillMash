@@ -53,6 +53,7 @@ from skillmash.representation import (  # noqa: E402
     LLMConfig,
     ParameterSpec,
     SkillRepresentation,
+    SlotRef,
 )
 
 
@@ -185,8 +186,8 @@ def main() -> None:
     parser.add_argument(
         "--similar_to_threshold",
         type=float,
-        default=0.0,
-        help="Minimum confidence for accepting similar_to matches. Defaults to 0.",
+        default=0.65,
+        help="Minimum confidence for accepting similar_to matches. Defaults to 0.65.",
     )
     parser.add_argument(
         "--substitute_for_threshold",
@@ -283,6 +284,8 @@ def _representation_from_payload(payload: dict) -> SkillRepresentation:
         tasks=[str(item) for item in payload.get("tasks", [])],
         inputs=[_parameter_from_payload(item) for item in payload.get("inputs", [])],
         outputs=[_artifact_from_payload(item) for item in payload.get("outputs", [])],
+        emits_slots=[SlotRef.from_dict(item) for item in payload.get("emits_slots", [])],
+        consumes_slots=[SlotRef.from_dict(item) for item in payload.get("consumes_slots", [])],
         preconditions=[
             _condition_from_payload(item)
             for item in payload.get("preconditions", [])

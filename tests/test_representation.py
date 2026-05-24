@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import pytest
+
 from skillmash.representation import (
     ArtifactSpec,
     ExtractedSkillSchema,
@@ -15,6 +17,8 @@ from skillmash.representation import (
     SkillManifestParser,
     SkillRepresentation,
     SkillRepresentationNormalizer,
+    SlotCandidate,
+    SlotRef,
     schema_from_llm_payload,
 )
 
@@ -117,6 +121,55 @@ def test_skill_representation_to_dict_includes_slot_fields_with_defaults() -> No
     payload = representation.to_dict()
     assert payload["emits_slots"] == []
     assert payload["consumes_slots"] == []
+
+
+def test_slot_ref_to_dict_and_from_dict_roundtrip() -> None:
+    slot = SlotRef(
+        name="api_security_findings",
+        parent="security_findings",
+        confidence=0.93,
+        source="llm_slot_candidate",
+        status="accepted",
+        evidence="review api security controls",
+    )
+
+    payload = slot.to_dict()
+    restored = SlotRef.from_dict(payload)
+
+    assert restored == slot
+
+
+def test_skill_representation_from_dict_rejects_legacy_string_slots() -> None:
+    with pytest.raises(ValueError, match="legacy emits_slots"):
+        SkillRepresentation.from_dict(
+            {
+                "id": "legacy",
+                "name": "Legacy",
+                "description": "legacy",
+                "version": "1.0.0",
+                "tasks": [],
+                "inputs": [],
+                "outputs": [],
+                "emits_slots": ["security_findings"],
+                "consumes_slots": [],
+                "preconditions": [],
+                "postconditions": [],
+            }
+        )
+
+    with pytest.raises(TypeError, match="list\\[SlotRef\\]"):
+        SkillRepresentation(
+            id="legacy2",
+            name="Legacy2",
+            description="legacy2",
+            version="1.0.0",
+            tasks=[],
+            inputs=[],
+            outputs=[],
+            preconditions=[],
+            postconditions=[],
+            emits_slots=["security_findings"],  # type: ignore[list-item]
+        )
 
 
 def test_normalizer_normalizes_input_and_output_names_and_types(tmp_path: Path) -> None:
@@ -540,6 +593,15 @@ def test_schema_from_llm_payload_keeps_candidate_names_for_normalizer() -> None:
                     "type": "pdf",
                 }
             ],
+            "emits_slots": [
+                {
+                    "kind": "api_review_findings",
+                    "parent_guess": "security_findings",
+                    "confidence": 0.92,
+                    "evidence": "review api and output findings",
+                }
+            ],
+            "consumes_slots": [],
             "constraints": [],
             "confidence": 0.9,
             "warnings": [],
@@ -550,6 +612,8 @@ def test_schema_from_llm_payload_keeps_candidate_names_for_normalizer() -> None:
     assert schema.tasks == ["research"]
     assert schema.outputs[0].type == "pdf"
     assert schema.confidence == 0.9
+    assert schema.emits_slots[0].kind == "api_review_findings"
+    assert schema.emits_slots[0].parent_guess == "security_findings"
 
 
 def test_schema_from_llm_payload_combines_legacy_format_into_type() -> None:
@@ -679,6 +743,254 @@ def test_representation_extractor_uses_batched_schema_extractor(tmp_path: Path) 
     ]
 
 
+def test_slot_gate_schema_gate_rejects_non_snake_case(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    extracted = ExtractedSkillSchema(
+        description="Review API.",
+        inputs=[{"name": "api_spec", "type": "yaml"}],
+        outputs=[{"name": "review_report", "type": "markdown"}],
+        emits_slots=[
+            _slot_candidate(
+                kind="SecurityFindings",
+                parent="security_findings",
+                confidence=0.95,
+            )
+        ],
+    )
+
+    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+
+    assert result.representation.emits_slots == []
+    assert _slot_statuses(result, "dropped_invalid_schema")
+    assert not _slot_statuses(result, "dropped_invalid_parent")
+
+
+def test_slot_gate_parent_and_confidence_gate(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    extracted = ExtractedSkillSchema(
+        description="Review API.",
+        inputs=[{"name": "api_spec", "type": "yaml"}],
+        outputs=[{"name": "review_report", "type": "markdown"}],
+        emits_slots=[
+            _slot_candidate(
+                kind="api_security_findings",
+                parent="not_allowed_parent",
+                confidence=0.96,
+            ),
+            _slot_candidate(
+                kind="api_security_findings_v2",
+                parent="security_findings",
+                confidence=0.79,
+            ),
+            _slot_candidate(
+                kind="api_security_findings_v3",
+                parent="security_findings",
+                confidence=0.81,
+            ),
+        ],
+    )
+
+    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+
+    assert [slot.name for slot in result.representation.emits_slots] == [
+        "api_security_findings_v3"
+    ]
+    assert _slot_statuses(result, "dropped_invalid_parent")
+    assert _slot_statuses(result, "dropped_low_confidence")
+    assert _slot_statuses(result, "accepted")
+
+
+def test_slot_gate_direction_and_duplicate_gate(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    extracted = ExtractedSkillSchema(
+        description="Review API.",
+        inputs=[{"name": "api_spec", "type": "yaml"}],
+        outputs=[{"name": "review_report", "type": "markdown"}],
+        emits_slots=[
+            _slot_candidate(
+                kind="consumes_security_findings",
+                parent="security_findings",
+                confidence=0.9,
+            ),
+            _slot_candidate(
+                kind="api_security_findings",
+                parent="security_findings",
+                confidence=0.9,
+            ),
+            _slot_candidate(
+                kind="api_security_findings",
+                parent="security_findings",
+                confidence=0.85,
+            ),
+        ],
+    )
+
+    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+
+    assert [slot.name for slot in result.representation.emits_slots] == [
+        "api_security_findings"
+    ]
+    assert _slot_statuses(result, "dropped_direction_mismatch")
+    assert _slot_statuses(result, "dropped_duplicate")
+
+
+def test_slot_gate_parent_conflict_and_ambiguous_parent(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    extracted = ExtractedSkillSchema(
+        description="Synthesize review findings.",
+        inputs=[{"name": "api_spec", "type": "yaml"}],
+        outputs=[{"name": "review_report", "type": "markdown"}],
+        emits_slots=[
+            _slot_candidate(
+                kind="shared_findings",
+                parent="security_findings",
+                confidence=0.95,
+            ),
+            _slot_candidate(
+                kind="shared_findings",
+                parent="design_review_findings",
+                confidence=0.82,
+            ),
+            _slot_candidate(
+                kind="ambiguous_findings",
+                parent="security_findings",
+                confidence=0.92,
+            ),
+            _slot_candidate(
+                kind="ambiguous_findings",
+                parent="design_review_findings",
+                confidence=0.89,
+            ),
+        ],
+    )
+
+    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+
+    assert [slot.name for slot in result.representation.emits_slots] == ["shared_findings"]
+    assert _slot_statuses(result, "dropped_parent_conflict")
+    assert _slot_statuses(result, "dropped_ambiguous_parent")
+
+
+def test_slot_gate_cardinality_overflow(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    extracted = ExtractedSkillSchema(
+        description="Generate many findings.",
+        inputs=[{"name": "api_spec", "type": "yaml"}],
+        outputs=[{"name": "review_report", "type": "markdown"}],
+        emits_slots=[
+            _slot_candidate(kind="f1", parent="security_findings", confidence=0.99),
+            _slot_candidate(kind="f2", parent="security_findings", confidence=0.98),
+            _slot_candidate(kind="f3", parent="security_findings", confidence=0.97),
+            _slot_candidate(kind="f4", parent="security_findings", confidence=0.96),
+        ],
+    )
+
+    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+
+    assert [slot.name for slot in result.representation.emits_slots] == ["f1", "f2", "f3"]
+    assert _slot_statuses(result, "dropped_overflow")
+
+
+def test_slot_gate_order_short_circuit(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    extracted = ExtractedSkillSchema(
+        description="Review API.",
+        inputs=[{"name": "api_spec", "type": "yaml"}],
+        outputs=[{"name": "review_report", "type": "markdown"}],
+        emits_slots=[
+            _slot_candidate(
+                kind="Bad Name",
+                parent="not_allowed_parent",
+                confidence=0.4,
+            )
+        ],
+    )
+
+    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+    statuses = [
+        diagnostic.details.get("status")
+        for diagnostic in result.diagnostics
+        if diagnostic.stage == "slot_gate"
+        and diagnostic.code == "slot_candidate_processed"
+    ]
+    assert statuses == ["dropped_invalid_schema"]
+
+
+def test_slot_role_shape_warning_is_non_blocking(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    extracted = ExtractedSkillSchema(
+        description="Aggregate findings.",
+        inputs=[{"name": "report", "type": "markdown"}],
+        outputs=[{"name": "delivery_brief", "type": "markdown"}],
+        consumes_slots=[
+            _slot_candidate(
+                kind="security_review_findings",
+                parent="security_findings",
+                confidence=0.95,
+            )
+        ],
+    )
+
+    result = SkillRepresentationNormalizer().normalize(manifest, extracted)
+
+    assert [slot.name for slot in result.representation.consumes_slots] == [
+        "security_review_findings"
+    ]
+    assert any(
+        diagnostic.code == "slot_role_shape_warning"
+        for diagnostic in result.diagnostics
+    )
+
+
+def test_slot_gate_integration_for_review_and_delivery_skills(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    root.mkdir()
+    (root / "review").mkdir()
+    (root / "delivery").mkdir()
+    review_manifest = _manifest(root / "review")
+    delivery_manifest = _manifest(root / "delivery")
+    normalizer = SkillRepresentationNormalizer()
+
+    review_extracted = ExtractedSkillSchema(
+        description="Review API and emit security findings.",
+        inputs=[{"name": "api_spec", "type": "yaml"}],
+        outputs=[{"name": "review_report", "type": "markdown"}],
+        emits_slots=[
+            _slot_candidate(
+                kind="api_security_findings",
+                parent="security_findings",
+                confidence=0.95,
+            )
+        ],
+    )
+    delivery_extracted = ExtractedSkillSchema(
+        description="Consume findings and produce delivery brief.",
+        inputs=[{"name": "constraints", "type": "text"}],
+        outputs=[{"name": "delivery_brief", "type": "markdown"}],
+        consumes_slots=[
+            _slot_candidate(
+                kind="api_security_findings",
+                parent="security_findings",
+                confidence=0.95,
+            )
+        ],
+        emits_slots=[
+            _slot_candidate(
+                kind="final_delivery_brief",
+                parent="delivery_brief",
+                confidence=0.95,
+            )
+        ],
+    )
+
+    review = normalizer.normalize(review_manifest, review_extracted).representation
+    delivery = normalizer.normalize(delivery_manifest, delivery_extracted).representation
+
+    assert review.emits_slots
+    assert delivery.consumes_slots
+    assert delivery.emits_slots
+
+
 def test_docs_and_example_reference_llm_env_names() -> None:
     readme = Path("README.md").read_text(encoding="utf-8")
     example = Path("examples/representation_extraction_demo.py").read_text(
@@ -698,6 +1010,31 @@ def test_representation_example_uses_rich_progress() -> None:
 
     assert "from rich.console import Console" in example
     assert "class RichProgress" in example
+
+
+def _slot_candidate(
+    *,
+    kind: str,
+    parent: str,
+    confidence: float,
+    evidence: str = "evidence",
+) -> SlotCandidate:
+    return SlotCandidate(
+        kind=kind,
+        parent_guess=parent,
+        confidence=confidence,
+        evidence=evidence,
+    )
+
+
+def _slot_statuses(result, status: str) -> list[dict]:
+    return [
+        diagnostic.details
+        for diagnostic in result.diagnostics
+        if diagnostic.stage == "slot_gate"
+        and diagnostic.code == "slot_candidate_processed"
+        and diagnostic.details.get("status") == status
+    ]
 
 
 def _manifest(tmp_path: Path):

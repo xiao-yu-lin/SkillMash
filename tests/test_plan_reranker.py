@@ -59,6 +59,15 @@ def _sample_planning_result() -> dict:
                 "status": "needs_input",
                 "goal_score": 8.0,
                 "edge_confidence": 0.8,
+                "plan_classification": "structurally_valid_but_incomplete",
+                "connectivity_trace": ["can_feed", "aggregates"],
+                "missing_contracts": [
+                    {
+                        "slot_name": "security_findings",
+                        "producer_skill_id": "api-pentest-team",
+                        "missing_fields": ["evidence"],
+                    }
+                ],
                 "steps": [
                     {"skill_id": "wisedev-team"},
                     {"skill_id": "api-design-review-team"},
@@ -75,6 +84,9 @@ def _sample_planning_result() -> dict:
                 "status": "needs_input",
                 "goal_score": 9.0,
                 "edge_confidence": 0.9,
+                "plan_classification": "structurally_valid_but_incomplete",
+                "connectivity_trace": ["consumes", "depends_on"],
+                "missing_contracts": [],
                 "steps": [
                     {"skill_id": "wisedev-team"},
                     {"skill_id": "api-pentest-team"},
@@ -91,6 +103,9 @@ def _sample_planning_result() -> dict:
                 "status": "ready",
                 "goal_score": 5.0,
                 "edge_confidence": 0.6,
+                "plan_classification": "executable",
+                "connectivity_trace": ["can_feed"],
+                "missing_contracts": [],
                 "steps": [{"skill_id": "quick-summary-team"}],
                 "missing_inputs": [],
             },
@@ -119,6 +134,9 @@ def test_plan_reranker_only_sorts_existing_candidate_plans() -> None:
             "type": "url",
         }
     ]
+    assert recommended[0]["plan_classification"] == "structurally_valid_but_incomplete"
+    assert recommended[0]["connectivity_trace"] == ["consumes", "depends_on"]
+    assert recommended[0]["missing_contracts"] == []
 
 
 def test_plan_reranker_limits_llm_candidates_by_top_m() -> None:

@@ -259,6 +259,9 @@ def _recommendation_from_candidate(
         ],
         "source_plan_index": plan_index,
         "missing_inputs": candidate.get("missing_inputs", []),
+        "plan_classification": candidate.get("plan_classification"),
+        "connectivity_trace": candidate.get("connectivity_trace", []),
+        "missing_contracts": candidate.get("missing_contracts", []),
         "reason": reason,
     }
 

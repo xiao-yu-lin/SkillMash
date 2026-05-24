@@ -42,6 +42,9 @@ class SkillGraphBuilder:
                     },
                 ),
             )
+            self._add_artifact_nodes(nodes, edges, skill)
+            self._add_slot_nodes(nodes, edges, skill)
+            self._add_depends_on_edges(edges, skill, registry)
 
         for match in llm_matches:
             if not match.accepted:
@@ -82,3 +85,135 @@ class SkillGraphBuilder:
 
     def _add_edge(self, edges: Dict[str, GraphEdge], edge: GraphEdge) -> None:
         edges.setdefault(edge.key, edge)
+
+    def _add_artifact_nodes(
+        self,
+        nodes: Dict[str, GraphNode],
+        edges: Dict[str, GraphEdge],
+        skill,
+    ) -> None:
+        skill_node_id = f"skill:{skill.id}"
+        for output in skill.outputs:
+            artifact_id = _artifact_node_id(output.name, output.type)
+            self._add_node(
+                nodes,
+                GraphNode(
+                    id=artifact_id,
+                    type="artifact",
+                    label=output.name,
+                    properties={"name": output.name, "type": output.type},
+                ),
+            )
+            self._add_edge(
+                edges,
+                GraphEdge(
+                    source=skill_node_id,
+                    target=artifact_id,
+                    type="produces",
+                    method="deterministic_artifact_binding",
+                ),
+            )
+        for parameter in skill.inputs:
+            artifact_id = _artifact_node_id(parameter.name, parameter.type)
+            self._add_node(
+                nodes,
+                GraphNode(
+                    id=artifact_id,
+                    type="artifact",
+                    label=parameter.name,
+                    properties={"name": parameter.name, "type": parameter.type},
+                ),
+            )
+            self._add_edge(
+                edges,
+                GraphEdge(
+                    source=artifact_id,
+                    target=skill_node_id,
+                    type="consumes",
+                    method="deterministic_artifact_binding",
+                ),
+            )
+
+    def _add_slot_nodes(
+        self,
+        nodes: Dict[str, GraphNode],
+        edges: Dict[str, GraphEdge],
+        skill,
+    ) -> None:
+        skill_node_id = f"skill:{skill.id}"
+        emits_slots = [slot for slot in getattr(skill, "emits_slots", []) if slot]
+        consumes_slots = [slot for slot in getattr(skill, "consumes_slots", []) if slot]
+
+        for slot_name in emits_slots:
+            slot_id = _slot_node_id(slot_name)
+            self._add_node(
+                nodes,
+                GraphNode(
+                    id=slot_id,
+                    type="slot",
+                    label=slot_name,
+                    properties={"name": slot_name},
+                ),
+            )
+            self._add_edge(
+                edges,
+                GraphEdge(
+                    source=skill_node_id,
+                    target=slot_id,
+                    type="produces",
+                    method="deterministic_slot_binding",
+                ),
+            )
+
+        consume_edge_type = "aggregates" if len(consumes_slots) > 1 else "consumes"
+        for slot_name in consumes_slots:
+            slot_id = _slot_node_id(slot_name)
+            self._add_node(
+                nodes,
+                GraphNode(
+                    id=slot_id,
+                    type="slot",
+                    label=slot_name,
+                    properties={"name": slot_name},
+                ),
+            )
+            self._add_edge(
+                edges,
+                GraphEdge(
+                    source=slot_id,
+                    target=skill_node_id,
+                    type=consume_edge_type,
+                    method="deterministic_slot_binding",
+                ),
+            )
+
+    def _add_depends_on_edges(
+        self,
+        edges: Dict[str, GraphEdge],
+        skill,
+        registry: SkillRegistry,
+    ) -> None:
+        known_skill_ids = set(registry.skills)
+        for condition in skill.preconditions:
+            if condition.type != "depends_on_skill":
+                continue
+            dependency_id = str(condition.expression or "").strip()
+            if not dependency_id or dependency_id not in known_skill_ids:
+                continue
+            self._add_edge(
+                edges,
+                GraphEdge(
+                    source=f"skill:{dependency_id}",
+                    target=f"skill:{skill.id}",
+                    type="depends_on",
+                    method="deterministic_precondition_dependency",
+                ),
+            )
+
+
+def _artifact_node_id(name: str, type_: str) -> str:
+    return f"artifact:{name}:{type_ or 'unknown'}"
+
+
+def _slot_node_id(name: str) -> str:
+    return f"slot:{name}"

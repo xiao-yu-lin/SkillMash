@@ -13,8 +13,11 @@ from skillmash.orchestration.planning.models import GroundedQuery, GroundingClie
 from skillmash.orchestration.planning.search import (
     artifact_matches,
     build_outgoing_edges,
+    missing_inputs,
+    output_keys,
     plan_stages,
     search_plans,
+    skill_goal_score,
 )
 from skillmash.orchestration.planning.slot_grouping import build_slot_groups
 from skillmash.orchestration.planning.utils import clamp
@@ -159,6 +162,14 @@ class SkillOrchestrator:
                 -float(plan.get("edge_confidence") or 0.0),
             ),
         )[: max(1, config.max_plans)]
+        candidate_plans = _append_mixed_graph_candidates(
+            candidate_plans,
+            artifacts=self.artifacts,
+            skill_by_id=self.skill_by_id,
+            grounded=grounded,
+            max_depth=max(1, config.max_depth),
+            max_plans=max(1, config.max_plans),
+        )
 
         candidate_plans = build_slot_groups(candidate_plans, self.all_relation_edges)
         candidate_plans = [
@@ -170,6 +181,13 @@ class SkillOrchestrator:
                 grounded=grounded,
                 feedback_path=config.relation_feedback_path,
                 min_edge_confidence=clamp(config.min_edge_confidence),
+            )
+            for plan in candidate_plans
+        ]
+        candidate_plans = [
+            _annotate_plan_execution_feasibility(
+                plan,
+                slot_contracts=self.artifacts.slot_contracts or {},
             )
             for plan in candidate_plans
         ]
@@ -488,6 +506,455 @@ def _relation_views(graph_edges: list[dict[str, Any]]) -> dict[str, Any]:
         "substitute_by_target": substitute_by_target,
         "similar_by_skill": similar_by_skill,
     }
+
+
+def _append_mixed_graph_candidates(
+    candidate_plans: list[dict[str, Any]],
+    *,
+    artifacts: BuildArtifacts,
+    skill_by_id: dict[str, dict[str, Any]],
+    grounded: GroundedQuery,
+    max_depth: int,
+    max_plans: int,
+) -> list[dict[str, Any]]:
+    mixed_plans = _build_mixed_graph_plans(
+        artifacts=artifacts,
+        skill_by_id=skill_by_id,
+        grounded=grounded,
+        max_depth=max_depth,
+        max_plans=max_plans,
+    )
+    by_signature: dict[tuple[str, ...], dict[str, Any]] = {}
+    for plan in candidate_plans + mixed_plans:
+        signature = tuple(
+            str(step.get("skill_id") or "")
+            for step in plan.get("steps", [])
+            if step.get("skill_id")
+        )
+        if not signature:
+            continue
+        existing = by_signature.get(signature)
+        if existing is None or float(plan.get("goal_score") or 0.0) > float(
+            existing.get("goal_score") or 0.0
+        ):
+            by_signature[signature] = plan
+    merged = sorted(
+        by_signature.values(),
+        key=lambda plan: (
+            plan.get("status") != "ready",
+            len(plan.get("missing_inputs") or []),
+            -int(plan.get("consumed_user_artifacts") or 0),
+            len(plan.get("steps") or []),
+            -float(plan.get("goal_score") or 0.0),
+            -float(plan.get("edge_confidence") or 0.0),
+        ),
+    )
+    return merged[:max_plans]
+
+
+def _build_mixed_graph_plans(
+    *,
+    artifacts: BuildArtifacts,
+    skill_by_id: dict[str, dict[str, Any]],
+    grounded: GroundedQuery,
+    max_depth: int,
+    max_plans: int,
+) -> list[dict[str, Any]]:
+    relation_edges = list(artifacts.graph.get("edges", []))
+    slot_producers: dict[str, set[str]] = {}
+    slot_consumers: dict[str, set[str]] = {}
+    slot_aggregators: dict[str, set[str]] = {}
+    artifact_producers: dict[tuple[str, str], set[str]] = {}
+    depends_on_pairs: set[tuple[str, str]] = set()
+
+    for edge in relation_edges:
+        source = str(edge.get("source") or "")
+        target = str(edge.get("target") or "")
+        edge_type = str(edge.get("type") or "")
+        if edge_type == "produces" and source.startswith("skill:") and target.startswith("artifact:"):
+            producer_id = source.removeprefix("skill:")
+            artifact_key = _artifact_key_from_node_id(target)
+            if artifact_key is not None:
+                artifact_producers.setdefault(artifact_key, set()).add(producer_id)
+        if edge_type == "produces" and source.startswith("skill:") and target.startswith("slot:"):
+            slot_name = target.removeprefix("slot:")
+            slot_producers.setdefault(slot_name, set()).add(source.removeprefix("skill:"))
+        elif edge_type == "consumes" and source.startswith("slot:") and target.startswith("skill:"):
+            slot_name = source.removeprefix("slot:")
+            slot_consumers.setdefault(slot_name, set()).add(target.removeprefix("skill:"))
+        elif edge_type == "aggregates" and source.startswith("slot:") and target.startswith("skill:"):
+            slot_name = source.removeprefix("slot:")
+            slot_aggregators.setdefault(slot_name, set()).add(target.removeprefix("skill:"))
+        elif edge_type == "depends_on" and source.startswith("skill:") and target.startswith("skill:"):
+            depends_on_pairs.add((source.removeprefix("skill:"), target.removeprefix("skill:")))
+
+    sink_skills = set()
+    for skill_ids in slot_consumers.values():
+        sink_skills.update(skill_ids)
+    for skill_ids in slot_aggregators.values():
+        sink_skills.update(skill_ids)
+
+    available_artifacts = {artifact.key for artifact in grounded.available_artifacts}
+    output_map = {skill_id: output_keys(skill) for skill_id, skill in skill_by_id.items()}
+    mixed_plans: list[dict[str, Any]] = []
+
+    for sink_skill_id in sorted(sink_skills):
+        if sink_skill_id not in skill_by_id:
+            continue
+        required_slots = {
+            slot_name
+            for slot_name, skill_ids in slot_consumers.items()
+            if sink_skill_id in skill_ids
+        } | {
+            slot_name
+            for slot_name, skill_ids in slot_aggregators.items()
+            if sink_skill_id in skill_ids
+        }
+        if not required_slots:
+            continue
+        producer_skill_ids = {
+            producer_id
+            for slot_name in required_slots
+            for producer_id in slot_producers.get(slot_name, set())
+            if producer_id in skill_by_id
+        }
+        if not producer_skill_ids:
+            continue
+
+        selected_skill_ids = set(producer_skill_ids)
+        selected_skill_ids.add(sink_skill_id)
+        _expand_depends_on_dependencies(selected_skill_ids, depends_on_pairs)
+        _expand_artifact_providers(
+            selected_skill_ids,
+            skill_by_id=skill_by_id,
+            available_artifacts=available_artifacts,
+            output_map=output_map,
+            artifact_producers=artifact_producers,
+        )
+        _expand_depends_on_dependencies(selected_skill_ids, depends_on_pairs)
+        slot_pairs = {
+            (producer_id, sink_skill_id)
+            for slot_name in required_slots
+            for producer_id in slot_producers.get(slot_name, set())
+            if producer_id in selected_skill_ids and producer_id != sink_skill_id
+        }
+        artifact_pairs = _artifact_dependency_pairs(
+            selected_skill_ids,
+            skill_by_id=skill_by_id,
+            artifact_producers=artifact_producers,
+        )
+        ordering_pairs = set(depends_on_pairs) | artifact_pairs | slot_pairs
+        ordered_skill_ids = _topological_order(selected_skill_ids, depends_on_pairs)
+        if ordering_pairs:
+            ordered_skill_ids = _topological_order(selected_skill_ids, ordering_pairs)
+        if not ordered_skill_ids or len(ordered_skill_ids) > max_depth:
+            continue
+
+        steps = []
+        produced_artifacts = set()
+        missing = []
+        runtime_available = set(available_artifacts)
+        for skill_id in ordered_skill_ids:
+            skill = skill_by_id[skill_id]
+            step_missing = missing_inputs(skill, runtime_available)
+            missing.extend({**item, "skill_id": skill_id} for item in step_missing)
+            steps.append(
+                {
+                    "step": len(steps) + 1,
+                    "skill_id": skill_id,
+                    "name": skill.get("name", skill_id),
+                    "tasks": list(skill.get("tasks", [])),
+                    "inputs": [
+                        {"name": item.get("name"), "type": item.get("type")}
+                        for item in skill.get("inputs", [])
+                    ],
+                    "outputs": [
+                        {"name": item.get("name"), "type": item.get("type")}
+                        for item in skill.get("outputs", [])
+                    ],
+                    "missing_inputs": step_missing,
+                }
+            )
+            produced = output_map.get(skill_id, set())
+            produced_artifacts.update(produced)
+            runtime_available.update(produced)
+
+        synthetic_edges = []
+        for source_id, target_id in sorted(artifact_pairs):
+            synthetic_edges.append(
+                {
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "confidence": 1.0,
+                    "method": "artifact_link",
+                    "relation_type": "consumes",
+                    "source_outputs": [],
+                    "target_inputs": [],
+                    "reasons": ["artifact produces/consumes bridge"],
+                }
+            )
+        for slot_name in sorted(required_slots):
+            for producer_id in sorted(slot_producers.get(slot_name, set())):
+                if producer_id not in selected_skill_ids:
+                    continue
+                relation_type = (
+                    "aggregates"
+                    if sink_skill_id in slot_aggregators.get(slot_name, set())
+                    else "consumes"
+                )
+                synthetic_edges.append(
+                    {
+                        "source_id": producer_id,
+                        "target_id": sink_skill_id,
+                        "confidence": 1.0,
+                        "method": "slot_link",
+                        "relation_type": relation_type,
+                        "slot_name": slot_name,
+                        "source_outputs": [],
+                        "target_inputs": [],
+                        "reasons": [f"{slot_name} {relation_type} link"],
+                    }
+                )
+        for source_id, target_id in sorted(depends_on_pairs):
+            if source_id in selected_skill_ids and target_id in selected_skill_ids:
+                synthetic_edges.append(
+                    {
+                        "source_id": source_id,
+                        "target_id": target_id,
+                        "confidence": 1.0,
+                        "method": "depends_on_link",
+                        "relation_type": "depends_on",
+                        "source_outputs": [],
+                        "target_inputs": [],
+                        "reasons": ["explicit dependency edge"],
+                    }
+                )
+
+        goal_score = sum(
+            skill_goal_score(skill_by_id[skill_id], grounded.goal_terms)
+            for skill_id in ordered_skill_ids
+            if skill_id in skill_by_id
+        )
+        mixed_plans.append(
+            {
+                "status": "ready" if not missing else "needs_input",
+                "goal_score": round(goal_score, 3),
+                "edge_confidence": 1.0,
+                "consumed_user_artifacts": _count_consumed_artifacts(
+                    steps,
+                    grounded.available_artifacts,
+                ),
+                "stages": plan_stages(
+                    [replace_step_for_stage(step) for step in steps],
+                    synthetic_edges,
+                ),
+                "steps": steps,
+                "produced_artifacts": [
+                    {"name": name, "type": type_, "source": "skill_output"}
+                    for name, type_ in sorted(produced_artifacts)
+                ],
+                "missing_inputs": missing,
+                "can_feed_edges": synthetic_edges,
+                "reasons": ["mixed_graph_slot_routing"],
+            }
+        )
+        if len(mixed_plans) >= max_plans:
+            break
+    return mixed_plans
+
+
+def _expand_depends_on_dependencies(
+    selected_skill_ids: set[str],
+    depends_on_pairs: set[tuple[str, str]],
+) -> None:
+    changed = True
+    while changed:
+        changed = False
+        for source_id, target_id in depends_on_pairs:
+            if target_id in selected_skill_ids and source_id not in selected_skill_ids:
+                selected_skill_ids.add(source_id)
+                changed = True
+
+
+def _expand_artifact_providers(
+    selected_skill_ids: set[str],
+    *,
+    skill_by_id: dict[str, dict[str, Any]],
+    available_artifacts: set[tuple[str, str]],
+    output_map: dict[str, set[tuple[str, str]]],
+    artifact_producers: dict[tuple[str, str], set[str]],
+) -> None:
+    changed = True
+    while changed:
+        changed = False
+        produced = set()
+        for skill_id in selected_skill_ids:
+            produced.update(output_map.get(skill_id, set()))
+        available = produced | set(available_artifacts)
+        pending_additions: set[str] = set()
+        for skill_id in sorted(selected_skill_ids):
+            skill = skill_by_id.get(skill_id)
+            if skill is None:
+                continue
+            for item in skill.get("inputs", []):
+                if not item.get("required", True):
+                    continue
+                expected = (str(item.get("name") or ""), str(item.get("type") or "unknown"))
+                if not expected[0]:
+                    continue
+                if artifact_matches(expected, available):
+                    continue
+                for producer_id in sorted(artifact_producers.get(expected, set())):
+                    if producer_id in selected_skill_ids or producer_id == skill_id:
+                        continue
+                    pending_additions.add(producer_id)
+        if pending_additions:
+            selected_skill_ids.update(pending_additions)
+            changed = True
+
+
+def _artifact_dependency_pairs(
+    selected_skill_ids: set[str],
+    *,
+    skill_by_id: dict[str, dict[str, Any]],
+    artifact_producers: dict[tuple[str, str], set[str]],
+) -> set[tuple[str, str]]:
+    pairs: set[tuple[str, str]] = set()
+    for target_id in selected_skill_ids:
+        skill = skill_by_id.get(target_id)
+        if skill is None:
+            continue
+        for item in skill.get("inputs", []):
+            if not item.get("required", True):
+                continue
+            expected = (str(item.get("name") or ""), str(item.get("type") or "unknown"))
+            if not expected[0]:
+                continue
+            for source_id in artifact_producers.get(expected, set()):
+                if source_id in selected_skill_ids and source_id != target_id:
+                    pairs.add((source_id, target_id))
+    return pairs
+
+
+def _artifact_key_from_node_id(node_id: str) -> tuple[str, str] | None:
+    if not node_id.startswith("artifact:"):
+        return None
+    payload = node_id.removeprefix("artifact:")
+    if ":" not in payload:
+        return None
+    name, type_ = payload.rsplit(":", 1)
+    if not name:
+        return None
+    return (name, type_ or "unknown")
+
+
+def _topological_order(
+    skill_ids: set[str],
+    depends_on_pairs: set[tuple[str, str]],
+) -> list[str]:
+    incoming = {skill_id: 0 for skill_id in skill_ids}
+    outgoing: dict[str, set[str]] = {skill_id: set() for skill_id in skill_ids}
+    for source_id, target_id in depends_on_pairs:
+        if source_id in skill_ids and target_id in skill_ids:
+            outgoing[source_id].add(target_id)
+            incoming[target_id] += 1
+
+    ordered = []
+    queue = sorted(skill_id for skill_id, count in incoming.items() if count == 0)
+    while queue:
+        current = queue.pop(0)
+        ordered.append(current)
+        for target_id in sorted(outgoing[current]):
+            incoming[target_id] -= 1
+            if incoming[target_id] == 0:
+                queue.append(target_id)
+    if len(ordered) != len(skill_ids):
+        ordered.extend(sorted(skill_ids - set(ordered)))
+    return ordered
+
+
+def _count_consumed_artifacts(
+    steps: list[dict[str, Any]],
+    available_artifacts: list[Any],
+) -> int:
+    explicit = {
+        artifact.key
+        for artifact in available_artifacts
+        if getattr(artifact, "source", "") != "implicit_query"
+    }
+    if not steps or not explicit:
+        return 0
+    consumed = 0
+    for item in steps[0].get("inputs", []):
+        expected = (str(item.get("name")), str(item.get("type") or "unknown"))
+        if artifact_matches(expected, explicit):
+            consumed += 1
+    return consumed
+
+
+def _annotate_plan_execution_feasibility(
+    plan: dict[str, Any],
+    *,
+    slot_contracts: dict[str, Any],
+) -> dict[str, Any]:
+    plan_copy = dict(plan)
+    required_contracts = (
+        (slot_contracts.get("contracts") or {})
+        if isinstance(slot_contracts, dict)
+        else {}
+    )
+    steps = list(plan_copy.get("steps", []))
+    edges = list(plan_copy.get("can_feed_edges", []))
+    output_names_by_skill = {
+        str(step.get("skill_id") or ""): {
+            str(output.get("name") or "")
+            for output in step.get("outputs", [])
+            if output.get("name")
+        }
+        for step in steps
+    }
+    missing_contracts = []
+    for edge in edges:
+        slot_name = str(edge.get("slot_name") or "")
+        if not slot_name:
+            continue
+        required = required_contracts.get(slot_name, {}).get("required_fields", [])
+        if not required:
+            continue
+        producer_id = str(edge.get("source_id") or "")
+        output_names = output_names_by_skill.get(producer_id, set())
+        missing_fields = [field for field in required if field not in output_names]
+        if missing_fields:
+            missing_contracts.append(
+                {
+                    "slot_name": slot_name,
+                    "producer_skill_id": producer_id,
+                    "missing_fields": missing_fields,
+                }
+            )
+    connectivity_trace = sorted(
+        {
+            str(edge.get("relation_type") or edge.get("method") or "unknown")
+            for edge in edges
+        }
+    )
+    strong_edge_types = {"can_feed", "consumes", "aggregates", "produces"}
+    has_strong_data_edge = any(
+        str(edge.get("relation_type") or "").strip() in strong_edge_types
+        or str(edge.get("relation_type") or "").strip() == ""
+        for edge in edges
+    )
+    plan_copy["missing_contracts"] = missing_contracts
+    plan_copy["connectivity_trace"] = connectivity_trace
+    if not steps:
+        plan_copy["plan_classification"] = "invalid"
+    elif len(steps) > 1 and not has_strong_data_edge:
+        plan_copy["plan_classification"] = "structurally_valid_but_incomplete"
+    elif plan_copy.get("missing_inputs") or missing_contracts:
+        plan_copy["plan_classification"] = "structurally_valid_but_incomplete"
+    else:
+        plan_copy["plan_classification"] = "executable"
+    return plan_copy
 
 
 def _slot_contract(skill: dict[str, Any], index: int) -> dict[str, Any]:

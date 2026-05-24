@@ -136,6 +136,8 @@ class SkillRepresentation:
     outputs: List[ArtifactSpec]
     preconditions: List[Condition]
     postconditions: List[Condition]
+    emits_slots: List[str] = field(default_factory=list)
+    consumes_slots: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -146,6 +148,8 @@ class SkillRepresentation:
             "tasks": list(self.tasks),
             "inputs": [item.to_dict() for item in self.inputs],
             "outputs": [item.to_dict() for item in self.outputs],
+            "emits_slots": list(self.emits_slots),
+            "consumes_slots": list(self.consumes_slots),
             "preconditions": [item.to_dict() for item in self.preconditions],
             "postconditions": [item.to_dict() for item in self.postconditions],
         }

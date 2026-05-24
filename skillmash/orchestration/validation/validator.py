@@ -23,6 +23,7 @@ def hard_filter_plans(
 
     min_conf = float(policy.get("min_edge_confidence", 0.7))
     require_explicit = bool(policy.get("require_explicit_adjacency", True))
+    strong_relation_types = {"can_feed", "consumes", "aggregates", "produces"}
 
     for index, plan in enumerate(plans, start=1):
         plan_id = f"plan_{index}"
@@ -46,6 +47,18 @@ def hard_filter_plans(
                 for edge in edges
                 if edge.get("source_id") and edge.get("target_id")
             }
+            has_strong_link = any(
+                (
+                    str(edge.get("relation_type") or edge.get("type") or "").strip()
+                    in strong_relation_types
+                )
+                or (
+                    str(edge.get("relation_type") or edge.get("type") or "").strip()
+                    == ""
+                )
+                for edge in edges
+                if edge.get("source_id") and edge.get("target_id")
+            )
             steps = [
                 str(step.get("skill_id") or "")
                 for step in plan.get("steps", [])
@@ -59,7 +72,7 @@ def hard_filter_plans(
                     if source in incoming and target in incoming:
                         incoming[target] += 1
                 roots = [skill_id for skill_id, count in incoming.items() if count == 0]
-                if len(roots) != 1:
+                if len(roots) == len(steps) or not has_strong_link:
                     reasons.add(HARD_FAIL_NO_EXPLICIT_CAN_FEED)
 
         if reasons:

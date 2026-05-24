@@ -65,6 +65,7 @@ class CandidateGenerator:
         candidates: Dict[Tuple[str, str], RelationCandidate] = {}
 
         self._add_exact_io_candidates(indexes, candidates)
+        self._add_slot_flow_candidates(skills, candidates)
         self._add_compatible_type_candidates(skills, candidates)
         self._add_task_overlap_candidates(indexes, candidates)
         self._add_shape_similarity_candidates(skills, candidates)
@@ -160,6 +161,73 @@ class CandidateGenerator:
                                 },
                             ),
                         )
+
+    def _add_slot_flow_candidates(
+        self,
+        skills: List[SkillRepresentation],
+        candidates: MutableMapping[Tuple[str, str], RelationCandidate],
+    ) -> None:
+        producers_by_slot: Dict[str, Set[str]] = defaultdict(set)
+        consumers_by_slot: Dict[str, Set[str]] = defaultdict(set)
+        skill_by_id = {skill.id: skill for skill in skills}
+
+        for skill in skills:
+            for slot_name in getattr(skill, "emits_slots", []) or []:
+                if slot_name:
+                    producers_by_slot[str(slot_name)].add(skill.id)
+            for slot_name in getattr(skill, "consumes_slots", []) or []:
+                if slot_name:
+                    consumers_by_slot[str(slot_name)].add(skill.id)
+
+        for slot_name in sorted(set(producers_by_slot) & set(consumers_by_slot)):
+            for source_id in sorted(producers_by_slot[slot_name]):
+                for target_id in sorted(consumers_by_slot[slot_name]):
+                    if source_id == target_id:
+                        continue
+                    target = skill_by_id[target_id]
+                    relation_hints = ["produces"]
+                    relation_hints.append(
+                        "aggregates"
+                        if len(getattr(target, "consumes_slots", []) or []) > 1
+                        else "consumes"
+                    )
+                    self._merge_candidate(
+                        candidates,
+                        RelationCandidate(
+                            source_id=source_id,
+                            target_id=target_id,
+                            relation_hints=relation_hints,
+                            candidate_methods=["slot_flow_match"],
+                            priority="high",
+                            evidence={
+                                "slot_name": slot_name,
+                                "source_emits_slots": [slot_name],
+                                "target_consumes_slots": [slot_name],
+                            },
+                        ),
+                    )
+
+        for skill in skills:
+            for condition in skill.preconditions:
+                if condition.type != "depends_on_skill":
+                    continue
+                source_id = str(condition.expression or "").strip()
+                if not source_id or source_id not in skill_by_id or source_id == skill.id:
+                    continue
+                self._merge_candidate(
+                    candidates,
+                    RelationCandidate(
+                        source_id=source_id,
+                        target_id=skill.id,
+                        relation_hints=["depends_on"],
+                        candidate_methods=["explicit_precondition_match"],
+                        priority="medium",
+                        evidence={
+                            "precondition_type": condition.type,
+                            "precondition_expression": source_id,
+                        },
+                    ),
+                )
 
     def _add_task_overlap_candidates(
         self,

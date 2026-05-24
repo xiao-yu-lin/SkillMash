@@ -13,6 +13,7 @@ from skillmash.representation import (
     SkillFolder,
     SkillFolderScanner,
     SkillManifestParser,
+    SkillRepresentation,
     SkillRepresentationNormalizer,
     schema_from_llm_payload,
 )
@@ -98,6 +99,24 @@ def test_manifest_parser_splits_frontmatter_and_body(tmp_path: Path) -> None:
     assert manifest.frontmatter["allowed-tools"] == "Bash(*), Read"
     assert manifest.body.startswith("# Demo")
     assert len(manifest.body_sha256) == 64
+
+
+def test_skill_representation_to_dict_includes_slot_fields_with_defaults() -> None:
+    representation = SkillRepresentation(
+        id="slot_demo",
+        name="Slot Demo",
+        description="Demo",
+        version="1.0.0",
+        tasks=["review"],
+        inputs=[ParameterSpec(name="api_spec", type="yaml")],
+        outputs=[ArtifactSpec(name="review_report", type="markdown")],
+        preconditions=[],
+        postconditions=[],
+    )
+
+    payload = representation.to_dict()
+    assert payload["emits_slots"] == []
+    assert payload["consumes_slots"] == []
 
 
 def test_normalizer_normalizes_input_and_output_names_and_types(tmp_path: Path) -> None:

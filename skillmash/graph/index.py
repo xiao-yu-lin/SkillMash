@@ -43,6 +43,9 @@ class SkillIndexBuilder:
         by_task: Dict[str, Set[str]] = defaultdict(set)
         by_data_type: Dict[str, Set[str]] = defaultdict(set)
         by_text_term: Dict[str, Set[str]] = defaultdict(set)
+        by_slot: Dict[str, Set[str]] = defaultdict(set)
+        by_artifact: Dict[str, Set[str]] = defaultdict(set)
+        by_aggregator: Dict[str, Set[str]] = defaultdict(set)
 
         for skill in registry.ordered_skills():
             for output in skill.outputs:
@@ -71,23 +74,40 @@ class SkillIndexBuilder:
         }
 
         for edge in graph.edges:
-            if not edge.source.startswith("skill:") or not edge.target.startswith(
-                "skill:"
-            ):
-                continue
-            source_id = edge.source.removeprefix("skill:")
-            target_id = edge.target.removeprefix("skill:")
-            neighbors[source_id].add(target_id)
-            if edge.type == "can_feed":
-                shared = sorted(
-                    skill_outputs.get(source_id, set())
-                    & skill_inputs.get(target_id, set())
-                )
-                for name in shared:
-                    if self.lexicon.is_generic_io_name(name):
-                        continue
-                    upstream_by_input[name].add(source_id)
-                    downstream_by_output[name].add(target_id)
+            if edge.source.startswith("skill:") and edge.target.startswith("skill:"):
+                source_id = edge.source.removeprefix("skill:")
+                target_id = edge.target.removeprefix("skill:")
+                neighbors[source_id].add(target_id)
+                if edge.type == "can_feed":
+                    shared = sorted(
+                        skill_outputs.get(source_id, set())
+                        & skill_inputs.get(target_id, set())
+                    )
+                    for name in shared:
+                        if self.lexicon.is_generic_io_name(name):
+                            continue
+                        upstream_by_input[name].add(source_id)
+                        downstream_by_output[name].add(target_id)
+
+            if edge.type == "produces" and edge.source.startswith("skill:"):
+                source_id = edge.source.removeprefix("skill:")
+                if edge.target.startswith("slot:"):
+                    slot_name = edge.target.removeprefix("slot:")
+                    by_slot[slot_name].add(source_id)
+                if edge.target.startswith("artifact:"):
+                    artifact_name = _artifact_name_from_id(edge.target)
+                    if artifact_name:
+                        by_artifact[artifact_name].add(source_id)
+
+            if edge.type == "aggregates" and edge.source.startswith("slot:") and edge.target.startswith("skill:"):
+                slot_name = edge.source.removeprefix("slot:")
+                target_id = edge.target.removeprefix("skill:")
+                by_aggregator[slot_name].add(target_id)
+
+            if edge.type == "consumes" and edge.source.startswith("artifact:") and edge.target.startswith("skill:"):
+                artifact_name = _artifact_name_from_id(edge.source)
+                if artifact_name:
+                    by_artifact[artifact_name].add(edge.target.removeprefix("skill:"))
 
         return SkillIndex(
             by_output=_freeze_index(
@@ -113,6 +133,9 @@ class SkillIndexBuilder:
                 by_text_term,
                 max_bucket_size=self.max_text_bucket_size,
             ),
+            by_slot=_freeze_index(by_slot),
+            by_artifact=_freeze_index(by_artifact),
+            by_aggregator=_freeze_index(by_aggregator),
         )
 
 
@@ -144,3 +167,10 @@ def _skill_terms(skill) -> Set[str]:
 
 def _tokenize(text: str) -> Set[str]:
     return _GRAPH_TERM_LEXICON.tokenize(text)
+
+
+def _artifact_name_from_id(node_id: str) -> str:
+    parts = node_id.split(":", 2)
+    if len(parts) < 3:
+        return ""
+    return parts[1]

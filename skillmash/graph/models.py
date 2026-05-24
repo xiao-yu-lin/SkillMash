@@ -10,7 +10,15 @@ from skillmash.representation.models import SkillRepresentation
 
 
 ALLOWED_RELATION_TYPES = frozenset(
-    {"can_feed", "similar_to", "substitute_for"}
+    {
+        "can_feed",
+        "similar_to",
+        "substitute_for",
+        "produces",
+        "consumes",
+        "depends_on",
+        "aggregates",
+    }
 )
 
 
@@ -177,6 +185,9 @@ class SkillIndex:
     upstream_by_input: Dict[str, List[str]]
     downstream_by_output: Dict[str, List[str]]
     by_text_term: Dict[str, List[str]]
+    by_slot: Dict[str, List[str]] = field(default_factory=dict)
+    by_artifact: Dict[str, List[str]] = field(default_factory=dict)
+    by_aggregator: Dict[str, List[str]] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -188,6 +199,9 @@ class SkillIndex:
             "upstream_by_input": self.upstream_by_input,
             "downstream_by_output": self.downstream_by_output,
             "by_text_term": self.by_text_term,
+            "by_slot": self.by_slot,
+            "by_artifact": self.by_artifact,
+            "by_aggregator": self.by_aggregator,
         }
 
 
@@ -205,6 +219,8 @@ class BuildManifest:
             "diagnostics": "diagnostics.json",
             "io_name_vocab": "io_name_vocab.json",
             "task_vocab": "task_vocab.json",
+            "slot_taxonomy": "slot_taxonomy.json",
+            "slot_contracts": "slot_contracts.json",
         }
     )
     thresholds: Dict[str, float] = field(
@@ -255,4 +271,6 @@ class GraphBuildResult:
     llm_matches: List[LLMMatch]
     graph: SkillGraph
     index: SkillIndex
+    slot_taxonomy: Dict[str, Any] = field(default_factory=dict)
+    slot_contracts: Dict[str, Any] = field(default_factory=dict)
     diagnostics: List[GraphDiagnostic] = field(default_factory=list)

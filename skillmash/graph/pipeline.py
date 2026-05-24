@@ -55,6 +55,8 @@ class GraphBuilder:
             thresholds=_matcher_thresholds(self.matcher),
             llm=_matcher_metadata(self.matcher),
         )
+        slot_taxonomy = _build_slot_taxonomy(registry.ordered_skills())
+        slot_contracts = _build_slot_contracts(slot_taxonomy)
 
         return GraphBuildResult(
             manifest=manifest,
@@ -63,6 +65,8 @@ class GraphBuilder:
             llm_matches=llm_matches,
             graph=graph,
             index=index,
+            slot_taxonomy=slot_taxonomy,
+            slot_contracts=slot_contracts,
             diagnostics=diagnostics,
         )
 
@@ -77,3 +81,26 @@ def _matcher_thresholds(matcher: OntologyMatcher) -> dict:
     if hasattr(matcher, "thresholds"):
         return dict(matcher.thresholds)
     return dict(DEFAULT_THRESHOLDS)
+
+
+def _build_slot_taxonomy(skills: Iterable[SkillRepresentation]) -> dict:
+    slots = set()
+    for skill in skills:
+        slots.update(getattr(skill, "emits_slots", []) or [])
+        slots.update(getattr(skill, "consumes_slots", []) or [])
+    return {"slots": sorted(slot for slot in slots if slot)}
+
+
+def _build_slot_contracts(slot_taxonomy: dict) -> dict:
+    contract_fields = [
+        "summary",
+        "severity",
+        "evidence",
+        "recommendation",
+        "blocking",
+    ]
+    contracts = {}
+    for slot_name in slot_taxonomy.get("slots", []):
+        if slot_name.endswith("_findings"):
+            contracts[slot_name] = {"required_fields": list(contract_fields)}
+    return {"contracts": contracts}

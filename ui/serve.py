@@ -1,4 +1,4 @@
-"""Serve the SkillMash graph UI without writing per-request console logs."""
+"""Serve the SkillMash graph UI with lightweight progress logging."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import json
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from time import perf_counter
 from typing import Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -27,11 +28,21 @@ class QuietHandler(SimpleHTTPRequestHandler):
         if parts.path != "/api/orchestrate":
             self.send_error(404, "Not Found")
             return
+        started_at = perf_counter()
         try:
             request = self._read_json_body()
+            query = str(request.get("query") or "").strip()
+            _log(
+                "orchestrate request started "
+                f"query_len={len(query)} top_k={request.get('top_k', 3)} "
+                f"max_plans={request.get('max_plans', 20)} max_depth={request.get('max_depth', 4)} "
+                f"max_branch={request.get('max_branch', 8)}"
+            )
             response = self._orchestrate(request)
             self._send_json(200, response)
+            _log(f"orchestrate request finished elapsed={perf_counter() - started_at:.2f}s")
         except Exception as exc:
+            _log(f"orchestrate request failed elapsed={perf_counter() - started_at:.2f}s error={exc!r}")
             self._send_json(500, {"error": str(exc)})
 
     def log_message(self, format: str, *args: object) -> None:
@@ -61,6 +72,7 @@ class QuietHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _orchestrate(self, request: dict) -> dict:
+        started_at = perf_counter()
         root = Path(self.root_dir or ".").resolve()
         build_dir = _resolve_build_dir(root, str(request.get("build_dir") or self.build_dir or "OUTPUT/build"))
         query = str(request.get("query") or "").strip()
@@ -79,8 +91,17 @@ class QuietHandler(SimpleHTTPRequestHandler):
         from skillmash.reranking import PlanReranker
         from skillmash.representation import LLMConfig
 
+        _log(f"loading llm config and build artifacts from {build_dir}")
+        stage_start = perf_counter()
         llm_config = LLMConfig.from_env(root / ".env")
         artifacts = load_build_artifacts(build_dir)
+        _log(f"artifacts loaded elapsed={perf_counter() - stage_start:.2f}s")
+
+        _log(
+            "planning candidates "
+            f"max_depth={max_depth} max_plans={max_plans} max_branch={max_branch}"
+        )
+        stage_start = perf_counter()
         planner = SkillOrchestrator(
             artifacts,
             llm_config=llm_config,
@@ -89,7 +110,16 @@ class QuietHandler(SimpleHTTPRequestHandler):
             max_branch=max_branch,
         )
         result = planner.plan(query)
-        return PlanReranker(llm_config=llm_config).rerank(result, top_k=top_k)
+        _log(f"planning finished elapsed={perf_counter() - stage_start:.2f}s")
+
+        _log(f"reranking plans top_k={top_k}")
+        stage_start = perf_counter()
+        reranked = PlanReranker(llm_config=llm_config).rerank(result, top_k=top_k)
+        _log(
+            f"reranking finished elapsed={perf_counter() - stage_start:.2f}s "
+            f"total_elapsed={perf_counter() - started_at:.2f}s"
+        )
+        return reranked
 
 
 def main() -> None:
@@ -121,6 +151,14 @@ def main() -> None:
         **handler_kwargs,
     )
     server = ThreadingHTTPServer((args.host, args.port), handler)
+    build_dir = QuietHandler.build_dir or "(not set)"
+    ui_url = _build_ui_url(args.host, args.port, QuietHandler.build_dir)
+    _log(
+        f"serving UI on http://{args.host}:{args.port} "
+        f"root={Path(args.root).resolve()} build_dir={build_dir}"
+    )
+    _log(f"open ui: {ui_url}")
+    _log(f"server startup successful host={args.host} port={args.port}")
     server.serve_forever()
 
 
@@ -147,6 +185,18 @@ def _ensure_project_import_paths(root: Path, sys_path: list[str]) -> None:
         value = str(path)
         if value not in sys_path:
             sys_path.insert(0, value)
+
+
+def _log(message: str) -> None:
+    print(f"[skillmash-ui] {message}", flush=True)
+
+
+def _build_ui_url(host: str, port: int, build_dir: Optional[str]) -> str:
+    display_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    path = "/ui/index.html"
+    if build_dir:
+        path = f"{path}?build_dir={quote(build_dir)}"
+    return f"http://{display_host}:{port}{path}"
 
 
 if __name__ == "__main__":

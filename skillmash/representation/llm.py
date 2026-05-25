@@ -295,7 +295,7 @@ class VLLMOfflineChatClient:
                     "path. Install vllm or use an API model name instead."
                 ) from exc
 
-            self._llm = LLM(model=self.config.model)
+            self._llm = LLM(model=self.config.model, tensor_parallel_size=2, gpu_memory_utilization=0.8, max_model_len=32768)
             self._sampling_params = SamplingParams(
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,

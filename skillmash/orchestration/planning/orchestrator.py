@@ -65,6 +65,7 @@ class SkillOrchestrator:
         top_k: int | None = None,
         include_candidates: bool | None = None,
         conservative_reject: bool | None = None,
+        hard_fail_missing_inputs: bool | None = None,
         allow_similar_slot_substitute: bool | None = None,
     ) -> None:
         self.artifacts = artifacts
@@ -81,6 +82,7 @@ class SkillOrchestrator:
             top_k=top_k,
             include_candidates=include_candidates,
             conservative_reject=conservative_reject,
+            hard_fail_missing_inputs=hard_fail_missing_inputs,
             allow_similar_slot_substitute=allow_similar_slot_substitute,
         )
 
@@ -134,6 +136,9 @@ class SkillOrchestrator:
             if planning_config
             else None,
             conservative_reject=planning_config.conservative_reject
+            if planning_config
+            else None,
+            hard_fail_missing_inputs=planning_config.hard_fail_missing_inputs
             if planning_config
             else None,
             allow_similar_slot_substitute=planning_config.allow_similar_slot_substitute
@@ -219,6 +224,9 @@ class SkillOrchestrator:
 
         policy = default_policy()
         policy["min_edge_confidence"] = clamp(config.min_edge_confidence)
+        policy["hard_fail_missing_required_input"] = bool(
+            config.hard_fail_missing_inputs
+        )
         validated_plans, fail_counts, plan_fail_reasons = hard_filter_plans(
             candidate_plans,
             policy=policy,
@@ -321,6 +329,7 @@ def _resolve_config(
     top_k: int | None,
     include_candidates: bool | None,
     conservative_reject: bool | None,
+    hard_fail_missing_inputs: bool | None,
     allow_similar_slot_substitute: bool | None,
 ) -> PlanningConfig:
     base_config = base or PlanningConfig()
@@ -349,6 +358,11 @@ def _resolve_config(
             bool(conservative_reject)
             if conservative_reject is not None
             else base_config.conservative_reject
+        ),
+        hard_fail_missing_inputs=(
+            bool(hard_fail_missing_inputs)
+            if hard_fail_missing_inputs is not None
+            else base_config.hard_fail_missing_inputs
         ),
         allow_similar_slot_substitute=(
             bool(allow_similar_slot_substitute)
@@ -381,6 +395,12 @@ def _planning_defaults_from_manifest(manifest: dict[str, Any]) -> PlanningConfig
         ),
         conservative_reject=bool(
             defaults.get("conservative_reject", PlanningConfig.conservative_reject)
+        ),
+        hard_fail_missing_inputs=bool(
+            defaults.get(
+                "hard_fail_missing_inputs",
+                PlanningConfig.hard_fail_missing_inputs,
+            )
         ),
         allow_similar_slot_substitute=bool(
             defaults.get(

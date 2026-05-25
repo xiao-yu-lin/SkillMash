@@ -23,13 +23,16 @@ def hard_filter_plans(
 
     min_conf = float(policy.get("min_edge_confidence", 0.7))
     require_explicit = bool(policy.get("require_explicit_adjacency", True))
+    hard_fail_missing_required = bool(
+        policy.get("hard_fail_missing_required_input", False)
+    )
     strong_relation_types = {"can_feed", "consumes", "aggregates", "produces"}
 
     for index, plan in enumerate(plans, start=1):
         plan_id = f"plan_{index}"
         reasons: set[str] = set()
 
-        if plan.get("missing_inputs"):
+        if hard_fail_missing_required and plan.get("missing_inputs"):
             reasons.add(HARD_FAIL_MISSING_REQUIRED_INPUT)
 
         edges = list(plan.get("can_feed_edges") or [])

@@ -131,6 +131,7 @@ class PlanningConfig:
     top_k: int = 3
     include_candidates: bool = True
     conservative_reject: bool = True
+    hard_fail_missing_inputs: bool = False
     allow_similar_slot_substitute: bool = False
     relation_feedback_path: str = ".skillmash/runtime/relation_feedback.jsonl"
     relation_feedback_window_days: int = 30

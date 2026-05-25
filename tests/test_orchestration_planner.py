@@ -129,8 +129,10 @@ def test_planning_config_exposes_entry_width_and_conservative_flags() -> None:
     cfg = PlanningConfig()
     assert hasattr(cfg, "max_entry_skills")
     assert hasattr(cfg, "conservative_reject")
+    assert hasattr(cfg, "hard_fail_missing_inputs")
     assert hasattr(cfg, "allow_similar_slot_substitute")
     assert cfg.conservative_reject is True
+    assert cfg.hard_fail_missing_inputs is False
     assert cfg.allow_similar_slot_substitute is False
 
 
@@ -476,7 +478,10 @@ def test_orchestrator_returns_conservative_rejection_when_no_validated_plan(
                 "goal_terms": ["review", "api", "spec"],
             }
         ),
-        planning_config=PlanningConfig(conservative_reject=True),
+        planning_config=PlanningConfig(
+            conservative_reject=True,
+            hard_fail_missing_inputs=True,
+        ),
         max_plans=5,
     )
     plan = planner.plan("Please review my api specification")
@@ -485,6 +490,33 @@ def test_orchestrator_returns_conservative_rejection_when_no_validated_plan(
     assert plan["ranking_mode"] == "conservative_reject"
     assert plan["decision"]["mode"] == "conservative_reject"
     assert plan["decision"]["fail_code_counts"]
+
+
+def test_orchestrator_keeps_needs_input_plan_in_ranking_pool_by_default(
+    tmp_path: Path,
+) -> None:
+    result = GraphBuilder(matcher=ExactMatcher()).build([_review_api_skill()])
+    write_graph_build_result(result, tmp_path)
+
+    planner = SkillOrchestrator(
+        load_build_artifacts(tmp_path),
+        llm_client=FakeGroundingClient(
+            {
+                "available_artifacts": [],
+                "goal_terms": ["review", "api", "spec"],
+            }
+        ),
+        planning_config=PlanningConfig(conservative_reject=True),
+        max_plans=5,
+    )
+    plan = planner.plan("Please review my api specification")
+
+    assert plan["recommended_plans"]
+    assert plan["ranking_mode"] != "conservative_reject"
+    assert any(
+        candidate.get("status") == "needs_input"
+        for candidate in plan.get("plans", [])
+    )
 
 
 def test_orchestrator_decision_trace_has_mode_and_fail_aggregation(
@@ -501,7 +533,10 @@ def test_orchestrator_decision_trace_has_mode_and_fail_aggregation(
                 "goal_terms": ["review", "api", "spec"],
             }
         ),
-        planning_config=PlanningConfig(conservative_reject=True),
+        planning_config=PlanningConfig(
+            conservative_reject=True,
+            hard_fail_missing_inputs=True,
+        ),
     )
     response = planner.plan("review api")
     assert "decision" in response

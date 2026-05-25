@@ -12,4 +12,5 @@ def default_policy() -> dict[str, object]:
         "allow_unknown_required_types": False,
         "min_edge_confidence": 0.7,
         "require_explicit_adjacency": True,
+        "hard_fail_missing_required_input": False,
     }

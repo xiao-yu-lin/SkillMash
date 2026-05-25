@@ -9,7 +9,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional, Protocol, Union
 
-from dotenv import dotenv_values
+from dotenv import load_dotenv
 
 
 @dataclass(frozen=True)
@@ -30,16 +30,15 @@ class LLMConfig:
 
     @classmethod
     def from_env(cls, env_path: Union[Path, str] = ".env") -> "LLMConfig":
-        values = _load_env_file(Path(env_path))
-        merged = {**values, **os.environ}
+        load_dotenv(env_path, override=False)
 
-        model = merged.get("LLM_MODEL")
+        model = os.environ.get("LLM_MODEL")
         if not model:
             raise RuntimeError(
                 "Missing LLM model. Set LLM_MODEL in .env or environment."
             )
 
-        api_key = merged.get("LLM_API_KEY") or ""
+        api_key = os.environ.get("LLM_API_KEY") or ""
         if not api_key and not is_local_model_path(model):
             raise RuntimeError(
                 "Missing LLM API key for API mode. Set LLM_API_KEY in .env "
@@ -47,11 +46,11 @@ class LLMConfig:
                 "existing local model path to use vLLM offline mode."
             )
 
-        base_url = merged.get("LLM_BASE_URL") or cls.base_url
-        temperature = float(merged.get("LLM_TEMPERATURE") or 0)
-        timeout_seconds = int(merged.get("LLM_TIMEOUT_SECONDS") or 60)
-        max_tokens = int(merged.get("LLM_MAX_TOKENS") or 2048)
-        batch_size = int(merged.get("LLM_BATCH_SIZE") or 32)
+        base_url = os.environ.get("LLM_BASE_URL") or cls.base_url
+        temperature = float(os.environ.get("LLM_TEMPERATURE") or 0)
+        timeout_seconds = int(os.environ.get("LLM_TIMEOUT_SECONDS") or 60)
+        max_tokens = int(os.environ.get("LLM_MAX_TOKENS") or 2048)
+        batch_size = int(os.environ.get("LLM_BATCH_SIZE") or 32)
         return cls(
             model=model,
             api_key=api_key,
@@ -452,16 +451,3 @@ def safe_model_dump(value: Any) -> str:
     return text[:2000]
 
 
-def _load_env_file(path: Path) -> Dict[str, str]:
-    """Load environment variables from a .env file.
-
-    Args:
-        path: Path to the .env file.
-
-    Returns:
-        Dictionary of environment variable key-value pairs.
-        Returns an empty dict if the file does not exist.
-    """
-    if not path.exists():
-        return {}
-    return dict(dotenv_values(path))

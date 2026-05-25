@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "fastapi>=0.136.1",
+    "json-repair>=0.30.0",
     "openai>=1.0.0",
     "python-dotenv>=1.0.0",
     "pytest>=8.0,<9; python_version < '3.10'",

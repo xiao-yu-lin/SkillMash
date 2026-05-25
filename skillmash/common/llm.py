@@ -10,6 +10,7 @@ from threading import Lock
 from typing import Any, Dict, List, Optional, Protocol, Union
 
 from dotenv import load_dotenv
+from json_repair import repair_json
 
 
 @dataclass(frozen=True)
@@ -245,7 +246,7 @@ class VLLMOfflineChatClient:
         content = outputs[0].outputs[0].text.strip()
         if not content:
             raise RuntimeError(f"{error_context} vLLM response content is empty.")
-        return _strip_json_fences(content)
+        return repair_json(content, return_objects=False)
 
     def complete_json_many(
         self,
@@ -302,7 +303,7 @@ class VLLMOfflineChatClient:
                 raise RuntimeError(
                     f"{error_context} vLLM batch response item {index} is empty."
                 )
-            contents.append(_strip_json_fences(content))
+            contents.append(repair_json(content, return_objects=False))
         return contents
 
     def _engine(self):
@@ -358,29 +359,6 @@ def _messages_to_prompt(llm: Any, messages: List[Dict[str, str]]) -> str:
             sections.append(f"{role}:\n{message['content']}")
         sections.append("ASSISTANT:\n")
         return "\n\n".join(sections)
-
-
-def _strip_json_fences(content: str) -> str:
-    """Remove markdown JSON code fences from content.
-
-    Strips leading and trailing ``` markers that may wrap JSON output
-    from the model.
-
-    Args:
-        content: Raw text that may contain markdown code fences.
-
-    Returns:
-        Content with code fences removed.
-    """
-    stripped = content.strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        return "\n".join(lines).strip()
-    return stripped
 
 
 def extract_message_content(message: Any) -> str:

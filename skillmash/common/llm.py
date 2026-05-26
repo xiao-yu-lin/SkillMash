@@ -25,8 +25,10 @@ class LLMConfig:
     model: str = ""
     base_url: str = "https://api.openai.com/v1"
     temperature: float = 0.0
+    top_p: float = 1.0
     timeout_seconds: int = 60
     max_tokens: int = 2048
+    max_model_len: int = 32768
     batch_size: int = 32
 
     @classmethod
@@ -49,16 +51,20 @@ class LLMConfig:
 
         base_url = os.environ.get("LLM_BASE_URL") or cls.base_url
         temperature = float(os.environ.get("LLM_TEMPERATURE") or 0)
+        top_p = float(os.environ.get("LLM_TOP_P") or 1.0)
         timeout_seconds = int(os.environ.get("LLM_TIMEOUT_SECONDS") or 60)
         max_tokens = int(os.environ.get("LLM_MAX_TOKENS") or 2048)
+        max_model_len = int(os.environ.get("LLM_MAX_MODEL_LEN") or 32768)
         batch_size = int(os.environ.get("LLM_BATCH_SIZE") or 32)
         return cls(
             model=model,
             api_key=api_key,
             base_url=base_url.rstrip("/"),
             temperature=temperature,
+            top_p=top_p,
             timeout_seconds=timeout_seconds,
             max_tokens=max_tokens,
+            max_model_len=max_model_len,
             batch_size=max(1, batch_size),
         )
 
@@ -167,6 +173,7 @@ class OpenAICompatibleChatClient:
         request: Dict[str, Any] = {
             "model": self.config.model,
             "temperature": self.config.temperature,
+            "top_p": self.config.top_p,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -324,9 +331,15 @@ class VLLMOfflineChatClient:
                     "path. Install vllm or use an API model name instead."
                 ) from exc
 
-            self._llm = LLM(model=self.config.model, tensor_parallel_size=2, gpu_memory_utilization=0.8, max_model_len=32768)
+            self._llm = LLM(
+                model=self.config.model,
+                tensor_parallel_size=2,
+                gpu_memory_utilization=0.8,
+                max_model_len=self.config.max_model_len,
+            )
             self._sampling_params = SamplingParams(
                 temperature=self.config.temperature,
+                top_p=self.config.top_p,
                 max_tokens=self.config.max_tokens,
             )
         return self._llm, self._sampling_params

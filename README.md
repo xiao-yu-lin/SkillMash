@@ -251,3 +251,29 @@ tests/
 ## Design Notes
 
 The representation module is intentionally independent of graph construction and online orchestration. It produces stable `SkillRepresentation` records and compact dynamic vocabularies for graph-facing semantic fields; later stages should consume those records instead of rereading `SKILL.md`.
+
+### Type Compatibility Rules
+
+The graph candidate generation in `skillmash/graph/candidates.py` uses type compatibility rules to determine whether one Skill's output can feed another Skill's input. The rules are:
+
+1. **Exact type match**: `output.type == input.type` (e.g., `audio -> audio`, `text -> text`)
+2. **Compatible type match**: defined in `COMPATIBLE_CAN_FEED_TYPES` constant
+
+Current compatible type pairs:
+
+```python
+COMPATIBLE_CAN_FEED_TYPES = frozenset(
+    {
+        ("markdown", "text"),   # Markdown content is text
+        ("audio", "file"),      # Audio files are file types
+        ("video", "file"),      # Video files are file types
+        ("image", "file"),      # Image files are file types
+        ("pdf", "file"),        # PDF files are file types
+        ("path", "file"),       # Paths can point to files
+    }
+)
+```
+
+These rules enable important workflow connections, such as:
+- `tts.audio` output → `speech-to-text.file` input (TTS audio can be transcribed)
+- `voice-synthesis.audio` output → `tts.ref_audio` input (synthesized audio can be used for voice cloning)

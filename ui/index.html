@@ -649,7 +649,6 @@
           <label class="check">Min Edge Confidence</label>
           <input id="orchestrationMinEdgeConfidence" type="number" min="0" max="1" step="0.05" value="0.7" aria-label="最小边置信度">
         </div>
-        <label class="check"><input id="orchestrationAllowSimilar" type="checkbox"> 允许 similar_to 参与槽位替换</label>
         <label class="check"><input id="orchestrationShowCandidates" type="checkbox"> 返回并保留候选计划</label>
         <button id="runOrchestration" class="primary">生成编排计划</button>
         <div id="orchestrationStatus" class="empty">输入任务目标后在下方生成计划图。</div>
@@ -688,7 +687,6 @@
       orchestrationTopK: document.getElementById("orchestrationTopK"),
       orchestrationTopM: document.getElementById("orchestrationTopM"),
       orchestrationMinEdgeConfidence: document.getElementById("orchestrationMinEdgeConfidence"),
-      orchestrationAllowSimilar: document.getElementById("orchestrationAllowSimilar"),
       orchestrationShowCandidates: document.getElementById("orchestrationShowCandidates"),
       runOrchestration: document.getElementById("runOrchestration"),
       orchestrationStatus: document.getElementById("orchestrationStatus"),
@@ -1341,7 +1339,6 @@
             top_k: parseInt(els.orchestrationTopK.value, 10),
             top_m: parseInt(els.orchestrationTopM.value, 10),
             min_edge_confidence: minEdgeConfidence,
-            allow_similar_slot_substitute: els.orchestrationAllowSimilar.checked,
             show_candidates: els.orchestrationShowCandidates.checked,
             build_dir: getOutputDirFromUrl() || "OUTPUT/v4/graph"
           })

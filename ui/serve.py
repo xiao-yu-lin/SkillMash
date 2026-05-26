@@ -35,15 +35,13 @@ class QuietHandler(SimpleHTTPRequestHandler):
             min_edge_confidence = float(request.get("min_edge_confidence") or 0.7)
             top_m = int(request.get("top_m") or 40)
             show_candidates = bool(request.get("show_candidates"))
-            allow_similar = bool(request.get("allow_similar_slot_substitute"))
             _log(
                 "orchestrate request started "
                 f"query_len={len(query)} top_k={request.get('top_k', 5)} "
                 f"max_plans={request.get('max_plans', 60)} max_depth={request.get('max_depth', 10)} "
                 f"max_branch={request.get('max_branch', 20)} "
                 f"min_edge_confidence={min_edge_confidence} top_m={top_m} "
-                f"show_candidates={show_candidates} "
-                f"allow_similar_slot_substitute={allow_similar}"
+                f"show_candidates={show_candidates}"
             )
             response = self._orchestrate(request)
             self._send_json(200, response)
@@ -95,7 +93,6 @@ class QuietHandler(SimpleHTTPRequestHandler):
         min_edge_confidence = max(0.0, min(1.0, float(request.get("min_edge_confidence") or 0.7)))
         top_m = max(1, min(80, int(request.get("top_m") or 40)))
         show_candidates = bool(request.get("show_candidates"))
-        allow_similar = bool(request.get("allow_similar_slot_substitute"))
         top_k = max(1, min(10, int(request.get("top_k") or 5)))
         max_plans = max(1, min(80, int(request.get("max_plans") or 60)))
         max_depth = max(1, min(20, int(request.get("max_depth") or 10)))
@@ -118,7 +115,7 @@ class QuietHandler(SimpleHTTPRequestHandler):
             "planning candidates "
             f"min_edge_confidence={min_edge_confidence} max_depth={max_depth} "
             f"max_plans={max_plans} max_branch={max_branch} top_m={top_m} top_k={top_k} "
-            f"show_candidates={show_candidates} allow_similar_slot_substitute={allow_similar}"
+            f"show_candidates={show_candidates}"
         )
         stage_start = perf_counter()
         planner = SkillOrchestrator(
@@ -131,7 +128,6 @@ class QuietHandler(SimpleHTTPRequestHandler):
             top_m=top_m,
             top_k=top_k,
             include_candidates=show_candidates,
-            allow_similar_slot_substitute=allow_similar,
         )
         result = planner.plan(query)
         _log(f"planning finished elapsed={perf_counter() - stage_start:.2f}s")

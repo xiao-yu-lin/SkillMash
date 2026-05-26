@@ -19,6 +19,11 @@ PRIORITY_RANK = {"high": 3, "medium": 2, "low": 1}
 COMPATIBLE_CAN_FEED_TYPES = frozenset(
     {
         ("markdown", "text"),
+        ("audio", "file"),      # 音频文件是文件的子类型
+        ("video", "file"),      # 视频文件是文件的子类型
+        ("image", "file"),      # 图片文件是文件的子类型
+        ("pdf", "file"),        # PDF 是文件的子类型
+        ("path", "file"),       # 路径可以指向文件
     }
 )
 GENERIC_TEXT_INPUT_NAMES = frozenset(

@@ -31,6 +31,9 @@ GENERIC_TEXT_INPUT_NAMES = frozenset(
         "body",
         "content",
         "prompt",
+        "query",
+        "question",
+        "request",
         "script",
         "text",
         "transcript",
@@ -426,7 +429,8 @@ def _can_feed_via_textual_coercion(
     output_terms: Set[str],
     input_terms: Set[str],
 ) -> bool:
-    if (output.type, parameter.type) != ("markdown", "text"):
+    # 支持 (markdown, text) 和 (text, text) 类型组合的语义匹配
+    if (output.type, parameter.type) not in (("markdown", "text"), ("text", "text")):
         return False
     if not _is_generic_text_input(parameter, input_terms):
         return False

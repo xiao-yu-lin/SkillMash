@@ -277,3 +277,33 @@ COMPATIBLE_CAN_FEED_TYPES = frozenset(
 These rules enable important workflow connections, such as:
 - `tts.audio` output → `speech-to-text.file` input (TTS audio can be transcribed)
 - `voice-synthesis.audio` output → `tts.ref_audio` input (synthesized audio can be used for voice cloning)
+
+### Textual Coercion for Semantic Matching
+
+When exact type match and compatible type match are insufficient, the candidate generator applies **textual coercion** rules to identify semantic connections between Skills with text-based inputs and outputs:
+
+**Supported type combinations:**
+- `(markdown, text)` - Markdown output can feed text input
+- `(text, text)` - Text output can feed text input (for generic text inputs)
+
+**Conditions for textual coercion:**
+
+1. **Generic text input**: The target input name must be in `GENERIC_TEXT_INPUT_NAMES`:
+   ```python
+   GENERIC_TEXT_INPUT_NAMES = frozenset({
+       "body", "content", "prompt", "query", "question",
+       "request", "script", "text", "transcript",
+   })
+   ```
+
+2. **Textual output**: The source output name must be in `TEXTUAL_OUTPUT_TERMS`:
+   ```python
+   TEXTUAL_OUTPUT_TERMS = frozenset({
+       "article", "brief", "content", "draft", "notes",
+       "report", "review", "script", "summary", "transcript",
+   })
+   ```
+
+These rules enable semantic workflow connections such as:
+- `speech-to-text.transcript` → `general-writing.query` (transcription can be used as writing input)
+- `read-arxiv-paper.summary` → `ai-ppt-generator.topic` (paper summary can become PPT topic)

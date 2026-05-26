@@ -26,14 +26,13 @@ def write_extraction_result(
     result: RepresentationExtractionResult,
     out_dir: Union[Path, str],
 ) -> None:
-    """Write all representation extraction artifacts to the output directory.
+    """Write minimal extraction artifacts to the output directory.
 
     Creates the output directory if it doesn't exist and writes:
     - representations.json: Normalized Skill representations.
     - diagnostics.json: Extraction diagnostics.
     - normalization_decisions.json: Normalization decision trace.
     - io_name_vocab.json: Final I/O name vocabulary.
-    - task_vocab.json: Final task vocabulary.
 
     Args:
         result: The extraction result to write.
@@ -52,6 +51,10 @@ def write_extraction_result(
         },
     )
     write_json_file(
+        output_path / "io_name_vocab.json",
+        result.io_name_vocab,
+    )
+    write_json_file(
         output_path / "diagnostics.json",
         {
             "diagnostics": [
@@ -68,12 +71,4 @@ def write_extraction_result(
                 for decision in result.normalization_decisions
             ]
         },
-    )
-    write_json_file(
-        output_path / "io_name_vocab.json",
-        result.io_name_vocab,
-    )
-    write_json_file(
-        output_path / "task_vocab.json",
-        result.task_vocab,
     )

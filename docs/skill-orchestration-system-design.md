@@ -224,8 +224,6 @@ edge = Skill-Skill typed relation
 | 边 | 含义 | 在线用途 |
 | --- | --- | --- |
 | `can_feed` | source 输出可满足 target 输入 | 路径搜索 |
-| `similar_to` | 两个 Skill 能力相近 | 排序、分析、替换参考 |
-| `substitute_for` | source 可替代 target | 替换候选和 rerank 信号 |
 
 artifact 不作为持久化图节点。artifact 信息保留在 Skill 的 inputs / outputs、索引和 edge evidence 中。
 
@@ -334,7 +332,7 @@ SkillRegistryBuilder
 1. 用确定性规则生成候选关系，减少 LLM 调用规模。
 2. 用 LLM 判断候选关系类型和置信度。
 3. 默认启用 order-swapped consensus，提高关系精度。
-4. 按 `can_feed`、`similar_to`、`substitute_for` 不同阈值接受关系。
+4. 按 `can_feed` 阈值接受关系。
 5. 将候选和 LLM 判断保存在 `llm_matches.json`，便于回溯。
 
 ### 6.3 BuildManifest

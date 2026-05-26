@@ -204,9 +204,7 @@ LLM 构图不需要额外持久化 `entity_id/entity_type/metadata/syntactic/lex
     }
   ],
   "allowed_relation_types": [
-    "can_feed",
-    "similar_to",
-    "substitute_for"
+    "can_feed"
   ]
 }
 ```
@@ -241,9 +239,6 @@ by_text_term: description/name/task/input/output tokens -> skill ids
 | --- | --- | --- | --- |
 | `exact_io_match` | `can_feed` | `source.outputs[].name == target.inputs[].name` | 高 |
 | `compatible_type_match` | `can_feed` | output/input 的 `type` 相同，且 name 或 description token 有交集 | 中 |
-| `task_overlap_match` | `similar_to` | 两个 Skill 的 task 有交集 | 中 |
-| `shape_similarity_match` | `substitute_for` | inputs/outputs 的 name 和 type 结构相近 | 中 |
-| `text_term_match` | `similar_to` | description/name 中有明显共享关键词 | 低 |
 
 候选对象格式：
 
@@ -278,7 +273,7 @@ by_text_term: description/name/task/input/output tokens -> skill ids
 
 本体匹配由 LLM 判断输入候选并产出匹配结果，程序侧做 deterministic validation。
 
-每个无序 Skill pair 在单次匹配 run 中只出现一次。LLM 在该候选的 `relation_hints` 范围内一次性判断所有可能成立的关系，因此同一对 Skill 可以同时输出 `A -> B can_feed`、`B -> A can_feed`、`similar_to` 和 `substitute_for` 等多条边。
+每个无序 Skill pair 在单次匹配 run 中只出现一次。LLM 在该候选的 `relation_hints` 范围内判断 `can_feed` 是否成立。
 
 默认构建会对每个候选 batch 调用两次 LLM：
 
@@ -290,8 +285,6 @@ by_text_term: description/name/task/input/output tokens -> skill ids
 LLM 需要判断：
 
 1. `can_feed`：A 的输出是否能满足 B 的输入。
-2. `similar_to`：两个 Skill 的能力是否相近（语义无向，持久化为双向边）。
-3. `substitute_for`：source 是否可替代 target（有向语义，不默认反向成立）。
 
 LLM 输出 schema：
 
@@ -336,13 +329,10 @@ LLM 输出 schema：
 | 边 | 含义 |
 | --- | --- |
 | `can_feed` | 一个 Skill 的输出可满足另一个 Skill 的输入。 |
-| `similar_to` | Skill 的任务、输入输出和描述语义相近；语义无向，落盘为双向边。 |
-| `substitute_for` | source Skill 在当前表征下可替代 target Skill；有向语义。 |
 
 在线使用约束：
 
 1. 在线路径构造只使用 `can_feed`。
-2. `similar_to/substitute_for` 仅用于排序阶段的 slot 替换候选，不用于扩展新路径。
 
 ### 3.10 产物格式
 
@@ -359,9 +349,7 @@ LLM 输出 schema：
     "diagnostics": "diagnostics.json"
   },
   "thresholds": {
-    "can_feed": 0.7,
-    "similar_to": 0.0,
-    "substitute_for": 0.0
+    "can_feed": 0.7
   }
 }
 ```
@@ -440,7 +428,6 @@ web_search can_feed summarize_text
 
 推荐流程：
 
-1. 在线 append 反馈日志（默认 `.skillmash/runtime/relation_feedback.jsonl`，支持配置覆盖）。
 2. 离线执行 `build --apply-feedback` 时加载反馈。
 3. 在滚动窗口内按阈值触发降权：默认窗口为最近 `30` 天（支持配置），且需满足 `count >= 20` 与 `fail_rate >= 0.6`。
 4. 每次触发将目标边 `confidence -= 0.1`，下限 `0.0`，并记录 `degrade_epoch` 以追踪降权轮次。
@@ -453,7 +440,7 @@ web_search can_feed summarize_text
 1. 使用 `description`、`tasks`、`inputs`、`outputs` 构造 LLM prompt。
 2. 生成 Skill-only graph 节点，节点属性包含 `description`、`tasks`、`inputs`、`outputs`。
 3. 用 `CandidateGenerator` 生成 relation candidates。
-4. 调用 LLM 判断候选是否成立，输出 `can_feed`、`similar_to`、`substitute_for`。
+4. 调用 LLM 判断候选是否成立，输出 `can_feed`。
 5. 程序侧校验 LLM 输出并过滤低置信边。
 6. 写出 `build_manifest.json`、`skills.json`、`skill_graph.json`、`skill_index.json`、`llm_matches.json`、`diagnostics.json`。
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -49,11 +50,9 @@ from skillmash.graph import (  # noqa: E402
 )
 from skillmash.representation import (  # noqa: E402
     ArtifactSpec,
-    Condition,
     LLMConfig,
     ParameterSpec,
     SkillRepresentation,
-    SlotRef,
 )
 
 
@@ -184,16 +183,9 @@ def main() -> None:
         help="Minimum confidence for accepting can_feed matches. Defaults to 0.7.",
     )
     parser.add_argument(
-        "--similar_to_threshold",
-        type=float,
-        default=0.65,
-        help="Minimum confidence for accepting similar_to matches. Defaults to 0.65.",
-    )
-    parser.add_argument(
-        "--substitute_for_threshold",
-        type=float,
-        default=0.0,
-        help="Minimum confidence for accepting substitute_for matches. Defaults to 0.",
+        "--debug_candidates",
+        action="store_true",
+        help="Emit DEBUG logs for relation candidate generation decisions.",
     )
     args = parser.parse_args()
 
@@ -207,6 +199,12 @@ def main() -> None:
     representations_json = Path(representations_arg).resolve()
     out_dir = Path(out_dir_arg).resolve()
     progress = ConsoleProgress()
+    if args.debug_candidates:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(levelname)s:%(name)s:%(message)s",
+        )
+        logging.getLogger("skillmash.graph.candidates").setLevel(logging.DEBUG)
 
     progress.log(f"loading representations: {representations_json}")
     representations = _load_representations(representations_json)
@@ -225,8 +223,6 @@ def main() -> None:
         require_consensus=not args.no_consensus,
         thresholds={
             "can_feed": _clamp_threshold(args.can_feed_threshold),
-            "similar_to": _clamp_threshold(args.similar_to_threshold),
-            "substitute_for": _clamp_threshold(args.substitute_for_threshold),
         },
         progress=progress.llm,
     )
@@ -266,36 +262,13 @@ def main() -> None:
 def _load_representations(path: Path) -> list[SkillRepresentation]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     return [
-        _representation_from_payload(item)
+        SkillRepresentation.from_dict(item)
         for item in payload.get("representations", [])
     ]
 
 
 def _clamp_threshold(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
-
-
-def _representation_from_payload(payload: dict) -> SkillRepresentation:
-    return SkillRepresentation(
-        id=str(payload.get("id") or ""),
-        name=str(payload.get("name") or ""),
-        description=str(payload.get("description") or ""),
-        version=str(payload.get("version") or "1.0.0"),
-        tasks=[str(item) for item in payload.get("tasks", [])],
-        inputs=[_parameter_from_payload(item) for item in payload.get("inputs", [])],
-        outputs=[_artifact_from_payload(item) for item in payload.get("outputs", [])],
-        emits_slots=[SlotRef.from_dict(item) for item in payload.get("emits_slots", [])],
-        consumes_slots=[SlotRef.from_dict(item) for item in payload.get("consumes_slots", [])],
-        preconditions=[
-            _condition_from_payload(item)
-            for item in payload.get("preconditions", [])
-        ],
-        postconditions=[
-            _condition_from_payload(item)
-            for item in payload.get("postconditions", [])
-        ],
-    )
-
 
 def _parameter_from_payload(payload: dict) -> ParameterSpec:
     return ParameterSpec(
@@ -314,14 +287,6 @@ def _artifact_from_payload(payload: dict) -> ArtifactSpec:
         type=str(payload.get("type") or "unknown"),
         description=str(payload.get("description") or ""),
         schema_ref=payload.get("schema_ref"),
-    )
-
-
-def _condition_from_payload(payload: dict) -> Condition:
-    return Condition(
-        type=str(payload.get("type") or ""),
-        expression=str(payload.get("expression") or ""),
-        description=str(payload.get("description") or ""),
     )
 
 

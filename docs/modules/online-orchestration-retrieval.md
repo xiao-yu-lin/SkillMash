@@ -34,7 +34,6 @@ CandidateComposer
 2. 不执行计划。
 3. 不重新提取 Skill 表征。
 4. 不修改离线图谱。
-5. 不使用 `similar_to/substitute_for` 扩展新路径。
 
 ### 3.2 输入输出视图
 

@@ -48,7 +48,6 @@ class PlanStep:
 
     skill_id: str
     name: str
-    tasks: list[str]
     inputs: list[dict[str, Any]]
     outputs: list[dict[str, Any]]
     missing_inputs: list[dict[str, Any]] = field(default_factory=list)
@@ -57,7 +56,6 @@ class PlanStep:
         return {
             "skill_id": self.skill_id,
             "name": self.name,
-            "tasks": self.tasks,
             "inputs": self.inputs,
             "outputs": self.outputs,
             "missing_inputs": self.missing_inputs,
@@ -132,9 +130,6 @@ class PlanningConfig:
     include_candidates: bool = True
     conservative_reject: bool = True
     hard_fail_missing_inputs: bool = False
-    allow_similar_slot_substitute: bool = False
-    relation_feedback_path: str = ".skillmash/runtime/relation_feedback.jsonl"
-    relation_feedback_window_days: int = 30
 
 
 @dataclass(frozen=True)

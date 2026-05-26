@@ -42,7 +42,6 @@ RelationFeedbackRecorder
 1. 不做初始 Skill 召回。
 2. 不执行计划。
 3. 不修改离线图谱。
-4. 不通过 `similar_to/substitute_for` 扩展新路径。
 
 ### 3.2 输入输出视图
 
@@ -129,9 +128,7 @@ sequenceDiagram
 ### 3.5 约束视图
 
 1. 在线可执行路径只以 `can_feed` 为准。
-2. `similar_to/substitute_for` 只用于 slot 候选替换，不用于扩展新路径。
 3. slot 替换采用贪心局部策略，每次替换后都要做整链 I/O 闭合校验；失败立即回退。
-4. 候选优先级：`substitute_for` 优先于 `similar_to`，且只允许 1-hop 候选池（原 Skill + 一跳邻居）。
 5. LLM ranker 只能选择现有候选索引，不能改步骤顺序、不能新增/合并计划。
 6. `top_m` 默认 `12`，`top_k` 默认 `3`。
 7. 当 LLM 返回索引非法、重复或数量不足时，必须使用确定性排序补齐到 `top_k`。
@@ -151,7 +148,6 @@ C: paper_search -> summarize_text -> create_ppt
 排序过程：
 
 1. 先验证 A/B/C 可执行性和目标覆盖。
-2. 对每个 step 构建 slot 候选池，优先尝试 `substitute_for`，其次 `similar_to`。
 3. 若替换后 I/O 不闭合，则回退原 step 并记录 `slot_no_viable_substitute`。
 4. LLM ranker 对 top_m 候选排序并返回 `recommended_plans`。
 5. 若 LLM 异常，回退到确定性排序并补齐 `top_k`。

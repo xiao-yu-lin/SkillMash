@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -15,10 +15,8 @@ from skillmash.orchestration.planning.orchestrator import (
 )
 from skillmash.representation import (
     ArtifactSpec,
-    Condition,
     ParameterSpec,
     SkillRepresentation,
-    SlotRef,
 )
 
 
@@ -78,48 +76,6 @@ class FakeGroundingClient:
         return json.dumps(self.payload)
 
 
-class SubstituteMatcher:
-    def match(self, registry, candidates):
-        return [
-            LLMMatch(
-                source_id="review_api_pro",
-                target_id="review_api",
-                relation_type="substitute_for",
-                confidence=0.9,
-                method="test_matcher",
-                accepted=True,
-            )
-        ]
-
-
-class IncompatibleSubstituteMatcher:
-    def match(self, registry, candidates):
-        return [
-            LLMMatch(
-                source_id="review_api_needs_extra_input",
-                target_id="review_api",
-                relation_type="substitute_for",
-                confidence=0.9,
-                method="test_matcher",
-                accepted=True,
-            )
-        ]
-
-
-class SimilarOnlyMatcher:
-    def match(self, registry, candidates):
-        return [
-            LLMMatch(
-                source_id="review_api_pro",
-                target_id="review_api",
-                relation_type="similar_to",
-                confidence=0.9,
-                method="test_matcher",
-                accepted=True,
-            )
-        ]
-
-
 class EmptyMatcher:
     def match(self, registry, candidates):
         return []
@@ -130,10 +86,8 @@ def test_planning_config_exposes_entry_width_and_conservative_flags() -> None:
     assert hasattr(cfg, "max_entry_skills")
     assert hasattr(cfg, "conservative_reject")
     assert hasattr(cfg, "hard_fail_missing_inputs")
-    assert hasattr(cfg, "allow_similar_slot_substitute")
     assert cfg.conservative_reject is True
     assert cfg.hard_fail_missing_inputs is False
-    assert cfg.allow_similar_slot_substitute is False
 
 
 def test_orchestrator_uses_user_artifacts_as_entry(tmp_path: Path) -> None:
@@ -243,227 +197,6 @@ def test_orchestrator_returns_recommendations_with_ranking_trace(tmp_path: Path)
     assert plan["rank_trace"]["top_k"] == 3
 
 
-def test_orchestrator_applies_slot_substitute_candidates(tmp_path: Path) -> None:
-    result = GraphBuilder(matcher=SubstituteMatcher()).build(
-        [_make_api_skill(), _review_api_skill(), _review_api_pro_skill()]
-    )
-    write_graph_build_result(result, tmp_path)
-
-    planner = SkillOrchestrator(
-        load_build_artifacts(tmp_path),
-        llm_client=FakeGroundingClient(
-            {
-                "available_artifacts": [],
-                "goal_terms": ["generate", "review", "api", "spec"],
-            }
-        ),
-        max_plans=5,
-    )
-    plan = planner.plan("Generate an api spec and review it")
-
-    matched_plan = next(
-        candidate
-        for candidate in plan["plans"]
-        if any(step.get("skill_id") == "review_api_pro" for step in candidate.get("steps", []))
-    )
-    assert matched_plan["slot_candidates"]
-
-
-def test_orchestrator_records_feedback_for_incompatible_substitute(tmp_path: Path) -> None:
-    result = GraphBuilder(matcher=IncompatibleSubstituteMatcher()).build(
-        [
-            _make_api_skill(),
-            _review_api_skill(),
-            _review_api_needs_extra_input_skill(),
-        ]
-    )
-    write_graph_build_result(result, tmp_path)
-    feedback_path = tmp_path / "runtime" / "relation_feedback.jsonl"
-
-    planner = SkillOrchestrator(
-        load_build_artifacts(tmp_path),
-        llm_client=FakeGroundingClient(
-            {
-                "available_artifacts": [],
-                "goal_terms": ["generate", "review", "api", "spec"],
-            }
-        ),
-        planning_config=PlanningConfig(
-            relation_feedback_path=str(feedback_path),
-            include_candidates=True,
-        ),
-        max_plans=5,
-    )
-    planner.plan("Generate an api spec and review it")
-
-    assert feedback_path.exists()
-    lines = feedback_path.read_text(encoding="utf-8").splitlines()
-    assert any("slot_incompatible_signature" in line for line in lines)
-
-
-def test_orchestrator_does_not_use_similar_for_slot_substitute_by_default(
-    tmp_path: Path,
-) -> None:
-    result = GraphBuilder(matcher=SimilarOnlyMatcher()).build(
-        [_make_api_skill(), _review_api_skill(), _review_api_pro_skill()]
-    )
-    write_graph_build_result(result, tmp_path)
-
-    planner = SkillOrchestrator(
-        load_build_artifacts(tmp_path),
-        llm_client=FakeGroundingClient(
-            {
-                "available_artifacts": [],
-                "goal_terms": ["generate", "review", "api", "spec"],
-            }
-        ),
-        max_plans=5,
-    )
-    plan = planner.plan("Generate an api spec and review it")
-
-    assert any(
-        any(step.get("skill_id") == "review_api" for step in candidate.get("steps", []))
-        for candidate in plan["plans"]
-    )
-    assert all(
-        not slot.get("similar_candidates")
-        for candidate in plan["plans"]
-        for slot in candidate.get("slot_candidates", [])
-    )
-
-
-def test_orchestrator_can_enable_similar_for_slot_substitute(
-    tmp_path: Path,
-) -> None:
-    result = GraphBuilder(matcher=SimilarOnlyMatcher()).build(
-        [_make_api_skill(), _review_api_skill(), _review_api_pro_skill()]
-    )
-    write_graph_build_result(result, tmp_path)
-
-    planner = SkillOrchestrator(
-        load_build_artifacts(tmp_path),
-        llm_client=FakeGroundingClient(
-            {
-                "available_artifacts": [],
-                "goal_terms": ["generate", "review", "api", "spec"],
-            }
-        ),
-        planning_config=PlanningConfig(allow_similar_slot_substitute=True),
-        max_plans=5,
-    )
-    plan = planner.plan("Generate an api spec and review it")
-
-    assert any(
-        slot.get("similar_candidates")
-        for candidate in plan["plans"]
-        for slot in candidate.get("slot_candidates", [])
-    )
-
-
-def test_orchestrator_connects_parallel_reviews_to_aggregator_without_direct_can_feed(
-    tmp_path: Path,
-) -> None:
-    result = GraphBuilder(matcher=EmptyMatcher()).build(
-        [
-            _review_prd_skill(),
-            _api_review_findings_skill(),
-            _ui_review_findings_skill(),
-            _delivery_brief_from_findings_skill(),
-        ]
-    )
-    write_graph_build_result(result, tmp_path)
-    planner = SkillOrchestrator(
-        load_build_artifacts(tmp_path),
-        llm_client=FakeGroundingClient(
-            {
-                "available_artifacts": [
-                    {"name": "prd_doc", "type": "markdown"},
-                    {"name": "api_spec", "type": "yaml"},
-                    {"name": "ui_prototype", "type": "image"},
-                ],
-                "goal_terms": ["review", "delivery", "brief"],
-            }
-        ),
-        planning_config=PlanningConfig(conservative_reject=False),
-        max_plans=10,
-    )
-    response = planner.plan("对PRD API UI做并行评审后汇总")
-
-    mixed = next(
-        candidate
-        for candidate in response.get("plans", [])
-        if "mixed_graph_slot_routing" in candidate.get("reasons", [])
-    )
-    assert mixed["plan_classification"] == "executable"
-    assert "aggregates" in mixed["connectivity_trace"]
-    assert {step["skill_id"] for step in mixed["steps"]} >= {
-        "review_prd",
-        "review_api_findings",
-        "review_ui_findings",
-        "delivery_brief",
-    }
-
-
-def test_orchestrator_uses_produces_consumes_to_bridge_generation_review_and_aggregation(
-    tmp_path: Path,
-) -> None:
-    result = GraphBuilder(matcher=EmptyMatcher()).build(
-        [
-            _generate_api_spec_skill(),
-            _api_review_findings_skill(),
-            _delivery_brief_from_findings_skill(),
-        ]
-    )
-    write_graph_build_result(result, tmp_path)
-    planner = SkillOrchestrator(
-        load_build_artifacts(tmp_path),
-        llm_client=FakeGroundingClient(
-            {
-                "available_artifacts": [{"name": "goal", "type": "text"}],
-                "goal_terms": ["generate", "review", "delivery", "brief"],
-            }
-        ),
-        planning_config=PlanningConfig(conservative_reject=False),
-        max_plans=10,
-    )
-    response = planner.plan("先生成API文档再评审并汇总")
-
-    mixed = next(
-        candidate
-        for candidate in response.get("plans", [])
-        if "mixed_graph_slot_routing" in candidate.get("reasons", [])
-    )
-    skill_order = [step["skill_id"] for step in mixed["steps"]]
-    assert "generate_api_spec" in skill_order
-    assert "review_api_findings" in skill_order
-    assert "delivery_brief" in skill_order
-    assert skill_order.index("generate_api_spec") < skill_order.index("review_api_findings")
-    assert mixed["plan_classification"] == "executable"
-    assert "consumes" in mixed["connectivity_trace"]
-
-
-def test_depends_on_only_connectivity_is_not_treated_as_executable() -> None:
-    annotated = _annotate_plan_execution_feasibility(
-        {
-            "steps": [
-                {"skill_id": "prepare_context", "outputs": []},
-                {"skill_id": "security_review", "outputs": []},
-            ],
-            "can_feed_edges": [
-                {
-                    "source_id": "prepare_context",
-                    "target_id": "security_review",
-                    "relation_type": "depends_on",
-                    "method": "depends_on_link",
-                }
-            ],
-            "missing_inputs": [],
-        },
-        slot_contracts={"contracts": {}},
-    )
-    assert annotated["plan_classification"] == "structurally_valid_but_incomplete"
-
-
 def test_orchestrator_returns_conservative_rejection_when_no_validated_plan(
     tmp_path: Path,
 ) -> None:
@@ -544,29 +277,6 @@ def test_orchestrator_decision_trace_has_mode_and_fail_aggregation(
     assert "fail_code_counts" in response["decision"]
 
 
-def test_slot_replacement_requires_explicit_can_feed_adjacency(tmp_path: Path) -> None:
-    result = GraphBuilder(matcher=SubstituteMatcher()).build(
-        [_make_api_skill(), _review_api_skill(), _review_api_pro_skill()]
-    )
-    write_graph_build_result(result, tmp_path)
-    planner = SkillOrchestrator(
-        load_build_artifacts(tmp_path),
-        llm_client=FakeGroundingClient(
-            {
-                "available_artifacts": [],
-                "goal_terms": ["generate", "review", "api", "spec"],
-            }
-        ),
-    )
-    response = planner.plan("Generate an api spec and review it")
-
-    for candidate in response.get("plans", []):
-        assert all(
-            edge.get("method") != "slot_replacement_chain"
-            for edge in candidate.get("can_feed_edges", [])
-        )
-
-
 def test_reliability_first_records_strategy_in_decision(tmp_path: Path) -> None:
     result = GraphBuilder(matcher=BranchingMatcher()).build(
         [_make_api_skill(), _review_api_skill(), _deploy_api_skill()]
@@ -614,7 +324,7 @@ def test_augment_with_structural_incomplete_plans_prefers_complex_query() -> Non
     output = _augment_with_structural_incomplete_plans(
         validated,
         candidates,
-        query="这是我们的 PRD、API 草案和 UI 原型。请评估风险并给上线建议",
+        query="杩欐槸鎴戜滑鐨?PRD銆丄PI 鑽夋鍜?UI 鍘熷瀷銆傝璇勪及椋庨櫓骞剁粰涓婄嚎寤鸿",
         grounded_query={"goal_terms": ["review", "audit"]},
         top_k=3,
     )
@@ -695,179 +405,3 @@ def _deploy_api_skill() -> SkillRepresentation:
     )
 
 
-def _review_api_pro_skill() -> SkillRepresentation:
-    return SkillRepresentation(
-        id="review_api_pro",
-        name="Review API Pro",
-        description="Review API specification for security with pro checks.",
-        version="1.0.0",
-        tasks=["review", "audit"],
-        inputs=[ParameterSpec(name="api_spec", type="yaml")],
-        outputs=[ArtifactSpec(name="review_report", type="markdown")],
-        preconditions=[],
-        postconditions=[],
-    )
-
-
-def _review_api_needs_extra_input_skill() -> SkillRepresentation:
-    return SkillRepresentation(
-        id="review_api_needs_extra_input",
-        name="Review API Needs Extra Input",
-        description="Review API specification but requires extra context.",
-        version="1.0.0",
-        tasks=["review", "audit"],
-        inputs=[
-            ParameterSpec(name="api_spec", type="yaml"),
-            ParameterSpec(name="workspace", type="path"),
-        ],
-        outputs=[ArtifactSpec(name="review_report", type="markdown")],
-        preconditions=[],
-        postconditions=[],
-    )
-
-
-def _generate_api_spec_skill() -> SkillRepresentation:
-    return SkillRepresentation(
-        id="generate_api_spec",
-        name="Generate API Spec",
-        description="Generate api spec from goal.",
-        version="1.0.0",
-        tasks=["generate", "design"],
-        inputs=[ParameterSpec(name="goal", type="text")],
-        outputs=[ArtifactSpec(name="api_spec", type="yaml")],
-        preconditions=[],
-        postconditions=[],
-    )
-
-
-def _review_prd_skill() -> SkillRepresentation:
-    return SkillRepresentation(
-        id="review_prd",
-        name="Review PRD",
-        description="Review PRD and output structured findings.",
-        version="1.0.0",
-        tasks=["review", "analysis"],
-        inputs=[ParameterSpec(name="prd_doc", type="markdown")],
-        outputs=[
-            ArtifactSpec(name="summary", type="text"),
-            ArtifactSpec(name="severity", type="text"),
-            ArtifactSpec(name="evidence", type="text"),
-            ArtifactSpec(name="recommendation", type="text"),
-            ArtifactSpec(name="blocking", type="bool"),
-        ],
-        emits_slots=[
-            SlotRef(
-                name="prd_findings",
-                parent="requirements_review_findings",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            )
-        ],
-        preconditions=[],
-        postconditions=[],
-    )
-
-
-def _api_review_findings_skill() -> SkillRepresentation:
-    return SkillRepresentation(
-        id="review_api_findings",
-        name="Review API Findings",
-        description="Review api spec and output structured findings.",
-        version="1.0.0",
-        tasks=["review", "audit"],
-        inputs=[ParameterSpec(name="api_spec", type="yaml")],
-        outputs=[
-            ArtifactSpec(name="summary", type="text"),
-            ArtifactSpec(name="severity", type="text"),
-            ArtifactSpec(name="evidence", type="text"),
-            ArtifactSpec(name="recommendation", type="text"),
-            ArtifactSpec(name="blocking", type="bool"),
-        ],
-        emits_slots=[
-            SlotRef(
-                name="security_findings",
-                parent="security_findings",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            )
-        ],
-        preconditions=[],
-        postconditions=[],
-    )
-
-
-def _ui_review_findings_skill() -> SkillRepresentation:
-    return SkillRepresentation(
-        id="review_ui_findings",
-        name="Review UI Findings",
-        description="Review ui prototype and output structured findings.",
-        version="1.0.0",
-        tasks=["review", "analysis"],
-        inputs=[ParameterSpec(name="ui_prototype", type="image")],
-        outputs=[
-            ArtifactSpec(name="summary", type="text"),
-            ArtifactSpec(name="severity", type="text"),
-            ArtifactSpec(name="evidence", type="text"),
-            ArtifactSpec(name="recommendation", type="text"),
-            ArtifactSpec(name="blocking", type="bool"),
-        ],
-        emits_slots=[
-            SlotRef(
-                name="design_review_findings",
-                parent="design_review_findings",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            )
-        ],
-        preconditions=[],
-        postconditions=[],
-    )
-
-
-def _delivery_brief_from_findings_skill() -> SkillRepresentation:
-    return SkillRepresentation(
-        id="delivery_brief",
-        name="Delivery Brief",
-        description="Aggregate findings and produce a delivery brief.",
-        version="1.0.0",
-        tasks=["synthesize", "orchestrate"],
-        inputs=[],
-        outputs=[ArtifactSpec(name="delivery_brief", type="markdown")],
-        consumes_slots=[
-            SlotRef(
-                name="prd_findings",
-                parent="requirements_review_findings",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            ),
-            SlotRef(
-                name="security_findings",
-                parent="security_findings",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            ),
-            SlotRef(
-                name="design_review_findings",
-                parent="design_review_findings",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            ),
-        ],
-        emits_slots=[
-            SlotRef(
-                name="delivery_brief",
-                parent="delivery_brief",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            )
-        ],
-        preconditions=[Condition(type="depends_on_skill", expression="review_api_findings")],
-        postconditions=[],
-    )

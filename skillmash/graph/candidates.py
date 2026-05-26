@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from typing import Dict, Iterable, List, MutableMapping, Set, Tuple
 
@@ -15,6 +16,35 @@ from skillmash.representation.models import ArtifactSpec, ParameterSpec, SkillRe
 
 
 PRIORITY_RANK = {"high": 3, "medium": 2, "low": 1}
+COMPATIBLE_CAN_FEED_TYPES = frozenset(
+    {
+        ("markdown", "text"),
+    }
+)
+GENERIC_TEXT_INPUT_NAMES = frozenset(
+    {
+        "body",
+        "content",
+        "prompt",
+        "script",
+        "text",
+        "transcript",
+    }
+)
+TEXTUAL_OUTPUT_TERMS = frozenset(
+    {
+        "article",
+        "brief",
+        "content",
+        "draft",
+        "notes",
+        "report",
+        "review",
+        "script",
+        "summary",
+        "transcript",
+    }
+)
 CAN_FEED_WEAK_TERMS = frozenset(
     {
         "analysis",
@@ -37,6 +67,7 @@ _GRAPH_TERM_LEXICON = ArtifactLexicon.create(
     stop_terms=DEFAULT_GRAPH_STOP_TERMS,
     min_token_length=3,
 )
+LOGGER = logging.getLogger(__name__)
 
 
 class CandidateGenerator:
@@ -64,12 +95,9 @@ class CandidateGenerator:
         indexes = _CandidateIndexes.from_skills(skills)
         candidates: Dict[Tuple[str, str], RelationCandidate] = {}
 
+        LOGGER.debug("candidate_generation_start skill_count=%s", len(skills))
         self._add_exact_io_candidates(indexes, candidates)
-        self._add_slot_flow_candidates(skills, candidates)
         self._add_compatible_type_candidates(skills, candidates)
-        self._add_task_overlap_candidates(indexes, candidates)
-        self._add_shape_similarity_candidates(skills, candidates)
-        self._add_text_term_candidates(indexes, candidates)
 
         ordered = sorted(
             candidates.values(),
@@ -80,7 +108,13 @@ class CandidateGenerator:
                 ",".join(item.relation_hints),
             ),
         )
-        return self._limit_per_skill_relation(ordered)
+        limited = self._limit_per_skill_relation(ordered)
+        LOGGER.debug(
+            "candidate_generation_done generated_count=%s emitted_count=%s",
+            len(ordered),
+            len(limited),
+        )
+        return limited
 
     def _add_exact_io_candidates(
         self,
@@ -89,11 +123,28 @@ class CandidateGenerator:
     ) -> None:
         for name in sorted(set(indexes.by_output_name) & set(indexes.by_input_name)):
             if self.lexicon.is_generic_io_name(name):
+                LOGGER.debug(
+                    "candidate_skipped reason=generic_io_name "
+                    "method=exact_io_match name=%s output_skills=%s input_skills=%s",
+                    name,
+                    ",".join(sorted(indexes.by_output_name[name])),
+                    ",".join(sorted(indexes.by_input_name[name])),
+                )
                 continue
             pair_fanout = (
                 len(indexes.by_output_name[name]) * len(indexes.by_input_name[name])
             )
             if pair_fanout > self.max_exact_io_pair_fanout:
+                LOGGER.debug(
+                    "candidate_skipped reason=max_exact_io_pair_fanout "
+                    "method=exact_io_match name=%s fanout=%s limit=%s "
+                    "output_skills=%s input_skills=%s",
+                    name,
+                    pair_fanout,
+                    self.max_exact_io_pair_fanout,
+                    ",".join(sorted(indexes.by_output_name[name])),
+                    ",".join(sorted(indexes.by_input_name[name])),
+                )
                 continue
             for source_id in sorted(indexes.by_output_name[name]):
                 for target_id in sorted(indexes.by_input_name[name]):
@@ -139,9 +190,7 @@ class CandidateGenerator:
                 shared_terms = sorted(source_terms & target_terms)
                 for output in source.outputs:
                     for parameter in target.inputs:
-                        if output.type != parameter.type:
-                            continue
-                        if output.type == "unknown":
+                        if not _can_feed_by_type(output.type, parameter.type):
                             continue
                         if not _can_feed_by_field_overlap(output, parameter):
                             continue
@@ -157,165 +206,11 @@ class CandidateGenerator:
                                     "matched_terms": shared_terms,
                                     "source_outputs": [output.to_dict()],
                                     "target_inputs": [parameter.to_dict()],
-                                    "matched_type": output.type,
+                                    "matched_type": f"{output.type}->{parameter.type}",
                                 },
                             ),
                         )
 
-    def _add_slot_flow_candidates(
-        self,
-        skills: List[SkillRepresentation],
-        candidates: MutableMapping[Tuple[str, str], RelationCandidate],
-    ) -> None:
-        producers_by_slot: Dict[str, Set[str]] = defaultdict(set)
-        consumers_by_slot: Dict[str, Set[str]] = defaultdict(set)
-        skill_by_id = {skill.id: skill for skill in skills}
-
-        for skill in skills:
-            for slot_name in skill.emit_slot_link_keys():
-                if slot_name:
-                    producers_by_slot[str(slot_name)].add(skill.id)
-            for slot_name in skill.consume_slot_link_keys():
-                if slot_name:
-                    consumers_by_slot[str(slot_name)].add(skill.id)
-
-        for slot_name in sorted(set(producers_by_slot) & set(consumers_by_slot)):
-            for source_id in sorted(producers_by_slot[slot_name]):
-                for target_id in sorted(consumers_by_slot[slot_name]):
-                    if source_id == target_id:
-                        continue
-                    target = skill_by_id[target_id]
-                    relation_hints = ["produces"]
-                    relation_hints.append(
-                        "aggregates"
-                        if len(getattr(target, "consumes_slots", []) or []) > 1
-                        else "consumes"
-                    )
-                    self._merge_candidate(
-                        candidates,
-                        RelationCandidate(
-                            source_id=source_id,
-                            target_id=target_id,
-                            relation_hints=relation_hints,
-                            candidate_methods=["slot_flow_match"],
-                            priority="high",
-                            evidence={
-                                "slot_name": slot_name,
-                                "source_emits_slots": [slot_name],
-                                "target_consumes_slots": [slot_name],
-                            },
-                        ),
-                    )
-
-        for skill in skills:
-            for condition in skill.preconditions:
-                if condition.type != "depends_on_skill":
-                    continue
-                source_id = str(condition.expression or "").strip()
-                if not source_id or source_id not in skill_by_id or source_id == skill.id:
-                    continue
-                self._merge_candidate(
-                    candidates,
-                    RelationCandidate(
-                        source_id=source_id,
-                        target_id=skill.id,
-                        relation_hints=["depends_on"],
-                        candidate_methods=["explicit_precondition_match"],
-                        priority="medium",
-                        evidence={
-                            "precondition_type": condition.type,
-                            "precondition_expression": source_id,
-                        },
-                    ),
-                )
-
-    def _add_task_overlap_candidates(
-        self,
-        indexes: "_CandidateIndexes",
-        candidates: MutableMapping[Tuple[str, str], RelationCandidate],
-    ) -> None:
-        for task, skill_ids in sorted(indexes.by_task.items()):
-            ids = sorted(skill_ids)
-            for source_id in ids:
-                for target_id in ids:
-                    if source_id >= target_id:
-                        continue
-                    for left, right in ((source_id, target_id), (target_id, source_id)):
-                        self._merge_candidate(
-                            candidates,
-                            RelationCandidate(
-                                source_id=left,
-                                target_id=right,
-                                relation_hints=["similar_to"],
-                                candidate_methods=["task_overlap_match"],
-                                priority="medium",
-                                evidence={"shared_tasks": [task]},
-                            ),
-                        )
-
-    def _add_shape_similarity_candidates(
-        self,
-        skills: List[SkillRepresentation],
-        candidates: MutableMapping[Tuple[str, str], RelationCandidate],
-    ) -> None:
-        signatures = {skill.id: _io_signature(skill) for skill in skills}
-        for source in skills:
-            for target in skills:
-                if source.id >= target.id:
-                    continue
-                shared_inputs = sorted(
-                    signatures[source.id]["inputs"] & signatures[target.id]["inputs"]
-                )
-                shared_outputs = sorted(
-                    signatures[source.id]["outputs"] & signatures[target.id]["outputs"]
-                )
-                if not shared_outputs:
-                    continue
-                if not shared_inputs and len(shared_outputs) < 2:
-                    continue
-                for left, right in ((source.id, target.id), (target.id, source.id)):
-                    self._merge_candidate(
-                        candidates,
-                        RelationCandidate(
-                            source_id=left,
-                            target_id=right,
-                            relation_hints=["substitute_for"],
-                            candidate_methods=["shape_similarity_match"],
-                            priority="medium",
-                            evidence={
-                                "shared_input_shape": shared_inputs,
-                                "shared_output_shape": shared_outputs,
-                            },
-                        ),
-                    )
-
-    def _add_text_term_candidates(
-        self,
-        indexes: "_CandidateIndexes",
-        candidates: MutableMapping[Tuple[str, str], RelationCandidate],
-    ) -> None:
-        for term, skill_ids in sorted(indexes.by_text_term.items()):
-            ids = sorted(skill_ids)
-            if len(ids) < 2 or len(term) < 4:
-                continue
-            if len(ids) > self.max_text_term_bucket_size:
-                continue
-            for source_id in ids:
-                for target_id in ids:
-                    if source_id >= target_id:
-                        continue
-                    for left, right in ((source_id, target_id), (target_id, source_id)):
-                        self._merge_candidate(
-                            candidates,
-                            RelationCandidate(
-                                source_id=left,
-                                target_id=right,
-                                relation_hints=["similar_to"],
-                                candidate_methods=["text_term_match"],
-                                priority="low",
-                                evidence={"matched_terms": [term]},
-                            ),
-                        )
 
     def _merge_candidate(
         self,
@@ -327,6 +222,7 @@ class CandidateGenerator:
         ]
         if not relation_hints:
             return
+        _debug_candidate_generated(candidate, relation_hints)
         key = tuple(sorted((candidate.source_id, candidate.target_id)))
         direction_key = f"{candidate.source_id}->{candidate.target_id}"
         candidate_evidence = {
@@ -371,16 +267,29 @@ class CandidateGenerator:
 
         limited: List[RelationCandidate] = []
         for key in sorted(buckets):
-            limited.extend(
-                sorted(
-                    buckets[key],
-                    key=lambda item: (
-                        -PRIORITY_RANK.get(item.priority, 0),
-                        item.target_id,
-                        ",".join(item.relation_hints),
-                    ),
-                )[: self.max_candidates_per_skill_relation]
+            ordered_bucket = sorted(
+                buckets[key],
+                key=lambda item: (
+                    -PRIORITY_RANK.get(item.priority, 0),
+                    item.target_id,
+                    ",".join(item.relation_hints),
+                ),
             )
+            kept = ordered_bucket[: self.max_candidates_per_skill_relation]
+            dropped = ordered_bucket[self.max_candidates_per_skill_relation :]
+            limited.extend(kept)
+            for candidate in dropped:
+                LOGGER.debug(
+                    "candidate_skipped reason=max_candidates_per_skill_relation "
+                    "source=%s target=%s priority=%s methods=%s "
+                    "relation_hints=%s limit=%s",
+                    candidate.source_id,
+                    candidate.target_id,
+                    candidate.priority,
+                    ",".join(candidate.candidate_methods),
+                    ",".join(candidate.relation_hints),
+                    self.max_candidates_per_skill_relation,
+                )
         return sorted(
             limited,
             key=lambda item: (
@@ -396,8 +305,6 @@ class _CandidateIndexes:
     def __init__(self) -> None:
         self.by_output_name: Dict[str, Set[str]] = defaultdict(set)
         self.by_input_name: Dict[str, Set[str]] = defaultdict(set)
-        self.by_task: Dict[str, Set[str]] = defaultdict(set)
-        self.by_text_term: Dict[str, Set[str]] = defaultdict(set)
         self.outputs_by_skill_name: Dict[Tuple[str, str], List[ArtifactSpec]] = (
             defaultdict(list)
         )
@@ -417,10 +324,6 @@ class _CandidateIndexes:
                 indexes.inputs_by_skill_name[(skill.id, parameter.name)].append(
                     parameter
                 )
-            for task in skill.tasks:
-                indexes.by_task[task].add(skill.id)
-            for term in _skill_terms(skill):
-                indexes.by_text_term[term].add(skill.id)
         return indexes
 
 
@@ -462,17 +365,29 @@ def _dedupe_list(values: List[object]) -> List[object]:
     return result
 
 
-def _io_signature(skill: SkillRepresentation) -> Dict[str, Set[Tuple[str, str]]]:
-    return {
-        "inputs": {(item.name, item.type) for item in skill.inputs},
-        "outputs": {(item.name, item.type) for item in skill.outputs},
-    }
+def _debug_candidate_generated(
+    candidate: RelationCandidate,
+    relation_hints: List[str],
+) -> None:
+    if not LOGGER.isEnabledFor(logging.DEBUG):
+        return
+    evidence = candidate.evidence
+    LOGGER.debug(
+        "candidate_generated source=%s target=%s priority=%s methods=%s "
+        "relation_hints=%s matched_terms=%s matched_type=%s",
+        candidate.source_id,
+        candidate.target_id,
+        candidate.priority,
+        ",".join(candidate.candidate_methods),
+        ",".join(relation_hints),
+        ",".join(str(item) for item in evidence.get("matched_terms", [])),
+        evidence.get("matched_type", ""),
+    )
 
 
 def _skill_terms(skill: SkillRepresentation) -> Set[str]:
     terms: Set[str] = set()
     chunks = [skill.id, skill.name, skill.description]
-    chunks.extend(skill.tasks)
     chunks.extend(item.name for item in skill.inputs)
     chunks.extend(item.description for item in skill.inputs)
     chunks.extend(item.name for item in skill.outputs)
@@ -487,7 +402,40 @@ def _can_feed_by_field_overlap(output: ArtifactSpec, parameter: ParameterSpec) -
         return True
     output_terms = _tokenize(f"{output.name} {output.description}") - CAN_FEED_WEAK_TERMS
     input_terms = _tokenize(f"{parameter.name} {parameter.description}") - CAN_FEED_WEAK_TERMS
-    return bool(output_terms & input_terms)
+    if output_terms & input_terms:
+        return True
+    return _can_feed_via_textual_coercion(output, parameter, output_terms, input_terms)
+
+
+def _can_feed_by_type(output_type: str, input_type: str) -> bool:
+    if output_type == "unknown" or input_type == "unknown":
+        return False
+    if output_type == input_type:
+        return True
+    return (output_type, input_type) in COMPATIBLE_CAN_FEED_TYPES
+
+
+def _can_feed_via_textual_coercion(
+    output: ArtifactSpec,
+    parameter: ParameterSpec,
+    output_terms: Set[str],
+    input_terms: Set[str],
+) -> bool:
+    if (output.type, parameter.type) != ("markdown", "text"):
+        return False
+    if not _is_generic_text_input(parameter, input_terms):
+        return False
+    return _is_textual_output(output, output_terms)
+
+
+def _is_generic_text_input(parameter: ParameterSpec, input_terms: Set[str]) -> bool:
+    return parameter.name in GENERIC_TEXT_INPUT_NAMES or bool(
+        input_terms & GENERIC_TEXT_INPUT_NAMES
+    )
+
+
+def _is_textual_output(output: ArtifactSpec, output_terms: Set[str]) -> bool:
+    return output.name in TEXTUAL_OUTPUT_TERMS or bool(output_terms & TEXTUAL_OUTPUT_TERMS)
 
 
 def _tokenize(text: str) -> Set[str]:

@@ -29,7 +29,6 @@ user query
   -> find entry Skills that consume grounded artifacts or match goal terms
   -> run forward search over can_feed graph
   -> compose shared-upstream paths into DAG candidate plans
-  -> build slot substitution candidates from substitute_for/similar_to
   -> LLM rank Top-M candidates into Top-K recommendations
   -> deterministic fallback when LLM ranking fails or returns insufficient results
 ```
@@ -89,7 +88,6 @@ Each state carries selected Skill IDs, available artifact `(name, type)` pairs,
 and `can_feed` edges used so far. When a Skill is added, its outputs are added to
 the available artifact set.
 
-`similar_to` and `substitute_for` are not used to expand search paths.
 
 Linear paths that share an upstream producer are composed into DAG plans. For
 example, if the graph contains both `wisedev-team -> api-design-review-team` and

@@ -12,12 +12,6 @@ from skillmash.representation.models import SkillRepresentation
 ALLOWED_RELATION_TYPES = frozenset(
     {
         "can_feed",
-        "similar_to",
-        "substitute_for",
-        "produces",
-        "consumes",
-        "depends_on",
-        "aggregates",
     }
 )
 
@@ -179,7 +173,6 @@ class SkillIndex:
 
     by_output: Dict[str, List[str]]
     by_input: Dict[str, List[str]]
-    by_task: Dict[str, List[str]]
     by_data_type: Dict[str, List[str]]
     neighbors: Dict[str, List[str]]
     upstream_by_input: Dict[str, List[str]]
@@ -193,7 +186,6 @@ class SkillIndex:
         return {
             "by_output": self.by_output,
             "by_input": self.by_input,
-            "by_task": self.by_task,
             "by_data_type": self.by_data_type,
             "neighbors": self.neighbors,
             "upstream_by_input": self.upstream_by_input,
@@ -218,16 +210,11 @@ class BuildManifest:
             "llm_matches": "llm_matches.json",
             "diagnostics": "diagnostics.json",
             "io_name_vocab": "io_name_vocab.json",
-            "task_vocab": "task_vocab.json",
-            "slot_taxonomy": "slot_taxonomy.json",
-            "slot_contracts": "slot_contracts.json",
         }
     )
     thresholds: Dict[str, float] = field(
         default_factory=lambda: {
             "can_feed": 0.7,
-            "similar_to": 0.65,
-            "substitute_for": 0.0,
         }
     )
     planning_defaults: Dict[str, Any] = field(
@@ -241,9 +228,6 @@ class BuildManifest:
             "top_k": 3,
             "include_candidates": True,
             "conservative_reject": True,
-            "allow_similar_slot_substitute": False,
-            "relation_feedback_path": ".skillmash/runtime/relation_feedback.jsonl",
-            "relation_feedback_window_days": 30,
         }
     )
     llm: Dict[str, Any] = field(default_factory=dict)
@@ -272,6 +256,4 @@ class GraphBuildResult:
     llm_matches: List[LLMMatch]
     graph: SkillGraph
     index: SkillIndex
-    slot_taxonomy: Dict[str, Any] = field(default_factory=dict)
-    slot_contracts: Dict[str, Any] = field(default_factory=dict)
     diagnostics: List[GraphDiagnostic] = field(default_factory=list)

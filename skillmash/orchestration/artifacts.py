@@ -18,9 +18,6 @@ class BuildArtifacts:
     graph: dict[str, Any]
     index: dict[str, Any]
     io_name_vocab: dict[str, Any] | None = None
-    task_vocab: dict[str, Any] | None = None
-    slot_taxonomy: dict[str, Any] | None = None
-    slot_contracts: dict[str, Any] | None = None
 
     @property
     def skill_by_id(self) -> dict[str, dict[str, Any]]:
@@ -37,9 +34,6 @@ def load_build_artifacts(build_dir: str | Path) -> BuildArtifacts:
     graph = _read_json(root / artifacts.get("graph", "skill_graph.json"))
     index = _read_json(root / artifacts.get("index", "skill_index.json"))
     io_name_vocab_path = root / artifacts.get("io_name_vocab", "io_name_vocab.json")
-    task_vocab_path = root / artifacts.get("task_vocab", "task_vocab.json")
-    slot_taxonomy_path = root / artifacts.get("slot_taxonomy", "slot_taxonomy.json")
-    slot_contracts_path = root / artifacts.get("slot_contracts", "slot_contracts.json")
     return BuildArtifacts(
         build_dir=root,
         manifest=manifest,
@@ -47,9 +41,6 @@ def load_build_artifacts(build_dir: str | Path) -> BuildArtifacts:
         graph=graph,
         index=index,
         io_name_vocab=_read_optional_json(io_name_vocab_path),
-        task_vocab=_read_optional_json(task_vocab_path),
-        slot_taxonomy=_read_optional_json(slot_taxonomy_path),
-        slot_contracts=_read_optional_json(slot_contracts_path),
     )
 
 

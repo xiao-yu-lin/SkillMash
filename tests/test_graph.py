@@ -16,10 +16,8 @@ from skillmash.graph import (
 from skillmash.orchestration import load_build_artifacts
 from skillmash.representation import (
     ArtifactSpec,
-    Condition,
     ParameterSpec,
     SkillRepresentation,
-    SlotRef,
 )
 
 
@@ -180,81 +178,6 @@ def test_candidate_generator_finds_exact_io_can_feed_candidate() -> None:
     assert "search_results" in evidence["matched_terms"]
 
 
-def test_candidate_generator_emits_slot_and_dependency_candidates() -> None:
-    registry = SkillRegistryBuilder().register(
-        [_review_api_skill(), _review_ui_skill(), _delivery_brief_skill()]
-    )
-
-    candidates = CandidateGenerator().generate(registry)
-    by_pair = {(candidate.source_id, candidate.target_id): candidate for candidate in candidates}
-
-    review_api_pair = by_pair[("review_api", "delivery_brief")]
-    assert "produces" in review_api_pair.relation_hints
-    assert "aggregates" in review_api_pair.relation_hints
-
-    review_ui_pair = by_pair[("review_ui", "delivery_brief")]
-    assert "produces" in review_ui_pair.relation_hints
-    assert "aggregates" in review_ui_pair.relation_hints
-
-    dependency_pair = by_pair[("review_api", "delivery_brief")]
-    assert "depends_on" in dependency_pair.relation_hints
-
-
-def test_candidate_generator_slot_parent_fallback_links_name_mismatch() -> None:
-    producer = SkillRepresentation(
-        id="producer",
-        name="Producer",
-        description="Emit detailed review finding name.",
-        version="1.0.0",
-        tasks=["review"],
-        inputs=[ParameterSpec(name="api_spec", type="yaml")],
-        outputs=[ArtifactSpec(name="review_report", type="markdown")],
-        emits_slots=[
-            SlotRef(
-                name="api_security_findings",
-                parent="security_findings",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            )
-        ],
-        preconditions=[],
-        postconditions=[],
-    )
-    consumer = SkillRepresentation(
-        id="consumer",
-        name="Consumer",
-        description="Consume findings by broad parent slot.",
-        version="1.0.0",
-        tasks=["aggregate"],
-        inputs=[ParameterSpec(name="review_report", type="markdown")],
-        outputs=[ArtifactSpec(name="delivery_brief", type="markdown")],
-        consumes_slots=[
-            SlotRef(
-                name="security_summary",
-                parent="security_findings",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            )
-        ],
-        preconditions=[],
-        postconditions=[],
-    )
-    registry = SkillRegistryBuilder().register([producer, consumer])
-
-    candidates = CandidateGenerator().generate(registry)
-    pair = next(
-        candidate
-        for candidate in candidates
-        if candidate.source_id == "producer" and candidate.target_id == "consumer"
-    )
-
-    assert "produces" in pair.relation_hints
-    assert "consumes" in pair.relation_hints
-    assert "security_findings" in str(pair.evidence)
-
-
 def test_candidate_generator_ignores_generic_exact_io_names() -> None:
     registry = SkillRegistryBuilder().register(
         [
@@ -263,22 +186,16 @@ def test_candidate_generator_ignores_generic_exact_io_names() -> None:
                 name="Report Writer",
                 description="Write a review report.",
                 version="1.0.0",
-                tasks=["review"],
                 inputs=[ParameterSpec(name="topic", type="text")],
                 outputs=[ArtifactSpec(name="review_report", type="markdown")],
-                preconditions=[],
-                postconditions=[],
             ),
             SkillRepresentation(
                 id="report_reviewer",
                 name="Report Reviewer",
                 description="Review a prior report.",
                 version="1.0.0",
-                tasks=["review"],
                 inputs=[ParameterSpec(name="review_report", type="markdown")],
                 outputs=[ArtifactSpec(name="score", type="json")],
-                preconditions=[],
-                postconditions=[],
             ),
         ]
     )
@@ -292,6 +209,55 @@ def test_candidate_generator_ignores_generic_exact_io_names() -> None:
     ]
 
 
+def test_candidate_generator_allows_markdown_output_to_feed_text_input() -> None:
+    registry = SkillRegistryBuilder().register(
+        [
+            SkillRepresentation(
+                id="read_arxiv_paper",
+                name="Read Arxiv Paper",
+                description="Read an arxiv paper and produce a markdown summary.",
+                version="1.0.0",
+                inputs=[ParameterSpec(name="url", type="url")],
+                outputs=[
+                    ArtifactSpec(
+                        name="summary",
+                        type="markdown",
+                        description="Markdown summary of the paper.",
+                    )
+                ],
+            ),
+            SkillRepresentation(
+                id="tts",
+                name="Text to Speech",
+                description="Convert provided text into speech audio.",
+                version="1.0.0",
+                inputs=[
+                    ParameterSpec(
+                        name="text",
+                        type="text",
+                        description="Text content to convert to speech.",
+                    )
+                ],
+                outputs=[ArtifactSpec(name="audio", type="audio")],
+            ),
+        ]
+    )
+
+    candidates = CandidateGenerator().generate(registry)
+
+    compatible = [
+        candidate
+        for candidate in candidates
+        if candidate.source_id == "read_arxiv_paper"
+        and candidate.target_id == "tts"
+        and "compatible_type_match" in candidate.candidate_methods
+    ]
+
+    assert len(compatible) == 1
+    evidence = compatible[0].evidence["directions"]["read_arxiv_paper->tts"]
+    assert evidence["matched_type"] == "markdown->text"
+
+
 def test_candidate_generator_ignores_high_fanout_text_terms() -> None:
     registry = SkillRegistryBuilder().register(
         [
@@ -300,11 +266,8 @@ def test_candidate_generator_ignores_high_fanout_text_terms() -> None:
                 name=f"Shared {index}",
                 description="Commonterm capability.",
                 version="1.0.0",
-                tasks=[f"task_{index}"],
                 inputs=[ParameterSpec(name=f"input_{index}", type="text")],
                 outputs=[ArtifactSpec(name=f"output_{index}", type="json")],
-                preconditions=[],
-                postconditions=[],
             )
             for index in range(3)
         ]
@@ -433,36 +396,6 @@ def test_graph_builder_adds_deterministic_exact_io_edges() -> None:
     ) in edge_types
 
 
-def test_graph_builder_mirrors_similar_edges_but_keeps_substitute_directional() -> None:
-    class RelationMatcher:
-        def match(self, registry, candidates):
-            return [
-                LLMMatch(
-                    source_id="web_search",
-                    target_id="summarize_text",
-                    relation_type="similar_to",
-                    confidence=0.7,
-                    accepted=True,
-                ),
-                LLMMatch(
-                    source_id="web_search",
-                    target_id="summarize_text",
-                    relation_type="substitute_for",
-                    confidence=0.8,
-                    accepted=True,
-                ),
-            ]
-
-    result = GraphBuilder(matcher=RelationMatcher()).build(
-        [_web_search_skill(), _summarize_skill()]
-    )
-    edge_types = {(edge.source, edge.target, edge.type) for edge in result.graph.edges}
-    assert ("skill:web_search", "skill:summarize_text", "similar_to") in edge_types
-    assert ("skill:summarize_text", "skill:web_search", "similar_to") in edge_types
-    assert ("skill:web_search", "skill:summarize_text", "substitute_for") in edge_types
-    assert ("skill:summarize_text", "skill:web_search", "substitute_for") not in edge_types
-
-
 def test_graph_builder_pipeline_writes_expected_artifacts(tmp_path: Path) -> None:
     result = GraphBuilder(matcher=AcceptingMatcher()).build(
         [_web_search_skill(), _summarize_skill()]
@@ -488,87 +421,6 @@ def test_graph_builder_pipeline_writes_expected_artifacts(tmp_path: Path) -> Non
     assert (tmp_path / "skill_index.json").exists()
     assert (tmp_path / "llm_matches.json").exists()
     assert (tmp_path / "diagnostics.json").exists()
-
-
-def test_graph_builder_adds_artifact_and_slot_nodes_with_structured_edges() -> None:
-    result = GraphBuilder(matcher=AcceptingMatcher()).build(
-        [_review_api_skill(), _review_ui_skill(), _delivery_brief_skill()]
-    )
-
-    node_by_id = {node.id: node for node in result.graph.nodes}
-    assert "artifact:api_spec:yaml" in node_by_id
-    assert "slot:security_findings" in node_by_id
-    assert "slot:design_review_findings" in node_by_id
-
-    edge_types = {(edge.source, edge.target, edge.type) for edge in result.graph.edges}
-    assert ("skill:review_api", "artifact:review_report:markdown", "produces") in edge_types
-    assert ("artifact:api_spec:yaml", "skill:review_api", "consumes") in edge_types
-    assert ("skill:review_api", "slot:security_findings", "produces") in edge_types
-    assert ("slot:security_findings", "skill:delivery_brief", "aggregates") in edge_types
-    assert ("skill:review_api", "skill:delivery_brief", "depends_on") in edge_types
-
-
-def test_graph_builder_slot_parent_fallback_adds_parent_slot_edges() -> None:
-    producer = SkillRepresentation(
-        id="producer",
-        name="Producer",
-        description="Emit detailed finding.",
-        version="1.0.0",
-        tasks=["review"],
-        inputs=[ParameterSpec(name="api_spec", type="yaml")],
-        outputs=[ArtifactSpec(name="review_report", type="markdown")],
-        emits_slots=[
-            SlotRef(
-                name="api_security_findings",
-                parent="security_findings",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            )
-        ],
-        preconditions=[],
-        postconditions=[],
-    )
-    consumer = SkillRepresentation(
-        id="consumer",
-        name="Consumer",
-        description="Consume broad slot parent.",
-        version="1.0.0",
-        tasks=["aggregate"],
-        inputs=[ParameterSpec(name="review_report", type="markdown")],
-        outputs=[ArtifactSpec(name="delivery_brief", type="markdown")],
-        consumes_slots=[
-            SlotRef(
-                name="security_summary",
-                parent="security_findings",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            )
-        ],
-        preconditions=[],
-        postconditions=[],
-    )
-
-    result = GraphBuilder(matcher=AcceptingMatcher()).build([producer, consumer])
-    edge_types = {(edge.source, edge.target, edge.type) for edge in result.graph.edges}
-
-    assert ("skill:producer", "slot:api_security_findings", "produces") in edge_types
-    assert ("skill:producer", "slot:security_findings", "produces") in edge_types
-    assert ("slot:security_summary", "skill:consumer", "consumes") in edge_types
-    assert ("slot:security_findings", "skill:consumer", "consumes") in edge_types
-
-
-def test_index_builder_tracks_slot_and_aggregator_indexes() -> None:
-    result = GraphBuilder(matcher=AcceptingMatcher()).build(
-        [_review_api_skill(), _review_ui_skill(), _delivery_brief_skill()]
-    )
-    index = result.index
-
-    assert index.by_slot["security_findings"] == ["review_api"]
-    assert index.by_slot["design_review_findings"] == ["review_ui"]
-    assert index.by_aggregator["security_findings"] == ["delivery_brief"]
-    assert index.by_artifact["api_spec"] == ["review_api"]
 
 
 def test_graph_builder_uses_match_diagnostics_without_matcher_diagnostics() -> None:
@@ -642,11 +494,8 @@ def _web_search_skill() -> SkillRepresentation:
         name="Web Search",
         description="Search the web and return relevant results.",
         version="1.0.0",
-        tasks=["search"],
         inputs=[ParameterSpec(name="topic", type="text")],
         outputs=[ArtifactSpec(name="search_results", type="json")],
-        preconditions=[],
-        postconditions=[],
     )
 
 
@@ -656,11 +505,8 @@ def _summarize_skill() -> SkillRepresentation:
         name="Summarize Text",
         description="Summarize search results into a concise summary.",
         version="1.0.0",
-        tasks=["summarize"],
         inputs=[ParameterSpec(name="search_results", type="json")],
         outputs=[ArtifactSpec(name="summary", type="markdown")],
-        preconditions=[],
-        postconditions=[],
     )
 
 
@@ -670,96 +516,8 @@ def _generic_report_skill() -> SkillRepresentation:
         name="Generic Report",
         description="Read and write a generic review report.",
         version="1.0.0",
-        tasks=["review"],
         inputs=[ParameterSpec(name="review_report", type="markdown")],
         outputs=[ArtifactSpec(name="review_report", type="markdown")],
-        preconditions=[],
-        postconditions=[],
     )
 
 
-def _review_api_skill() -> SkillRepresentation:
-    return SkillRepresentation(
-        id="review_api",
-        name="Review API",
-        description="Review API security and produce findings.",
-        version="1.0.0",
-        tasks=["review", "audit"],
-        inputs=[ParameterSpec(name="api_spec", type="yaml")],
-        outputs=[ArtifactSpec(name="review_report", type="markdown")],
-        emits_slots=[
-            SlotRef(
-                name="security_findings",
-                parent="security_findings",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            )
-        ],
-        preconditions=[],
-        postconditions=[],
-    )
-
-
-def _review_ui_skill() -> SkillRepresentation:
-    return SkillRepresentation(
-        id="review_ui",
-        name="Review UI",
-        description="Review UI design and accessibility findings.",
-        version="1.0.0",
-        tasks=["review", "analyze"],
-        inputs=[ParameterSpec(name="ui_prototype", type="image")],
-        outputs=[ArtifactSpec(name="review_report", type="markdown")],
-        emits_slots=[
-            SlotRef(
-                name="design_review_findings",
-                parent="design_review_findings",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            )
-        ],
-        preconditions=[],
-        postconditions=[],
-    )
-
-
-def _delivery_brief_skill() -> SkillRepresentation:
-    return SkillRepresentation(
-        id="delivery_brief",
-        name="Delivery Brief",
-        description="Aggregate findings and produce brief.",
-        version="1.0.0",
-        tasks=["synthesize", "orchestrate"],
-        inputs=[ParameterSpec(name="constraints", type="text", required=False)],
-        outputs=[ArtifactSpec(name="delivery_brief", type="markdown")],
-        consumes_slots=[
-            SlotRef(
-                name="security_findings",
-                parent="security_findings",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            ),
-            SlotRef(
-                name="design_review_findings",
-                parent="design_review_findings",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            ),
-        ],
-        emits_slots=[
-            SlotRef(
-                name="delivery_brief",
-                parent="delivery_brief",
-                confidence=0.95,
-                source="test",
-                status="accepted",
-            )
-        ],
-        preconditions=[
-            Condition(type="depends_on_skill", expression="review_api"),
-        ],
-        postconditions=[],
-    )

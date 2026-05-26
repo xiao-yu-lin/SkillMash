@@ -65,7 +65,6 @@ class RepresentationExtractor:
                 diagnostics=diagnostics,
                 normalization_decisions=normalization_decisions,
                 io_name_vocab=self.normalizer.io_name_vocabulary.to_dict(),
-                task_vocab=self.normalizer.task_vocabulary.to_dict(),
             )
 
         completed = 0
@@ -90,7 +89,6 @@ class RepresentationExtractor:
             diagnostics=diagnostics,
             normalization_decisions=normalization_decisions,
             io_name_vocab=self.normalizer.io_name_vocabulary.to_dict(),
-            task_vocab=self.normalizer.task_vocabulary.to_dict(),
         )
 
     def _process_folder(self, index: int, folder, total: int):
@@ -166,5 +164,4 @@ class RepresentationExtractor:
             diagnostics=diagnostics,
             normalization_decisions=normalization_decisions,
             io_name_vocab=self.normalizer.io_name_vocabulary.to_dict(),
-            task_vocab=self.normalizer.task_vocabulary.to_dict(),
         )

@@ -60,7 +60,7 @@ def _sample_planning_result() -> dict:
                 "goal_score": 8.0,
                 "edge_confidence": 0.8,
                 "plan_classification": "structurally_valid_but_incomplete",
-                "connectivity_trace": ["can_feed", "aggregates"],
+                "connectivity_trace": ["can_feed"],
                 "can_feed_edges": [
                     {
                         "source_id": "wisedev-team",
@@ -93,7 +93,7 @@ def _sample_planning_result() -> dict:
                 "goal_score": 9.0,
                 "edge_confidence": 0.9,
                 "plan_classification": "structurally_valid_but_incomplete",
-                "connectivity_trace": ["consumes", "depends_on"],
+                "connectivity_trace": ["can_feed"],
                 "can_feed_edges": [
                     {
                         "source_id": "wisedev-team",
@@ -151,7 +151,7 @@ def test_plan_reranker_only_sorts_existing_candidate_plans() -> None:
         }
     ]
     assert recommended[0]["plan_classification"] == "structurally_valid_but_incomplete"
-    assert recommended[0]["connectivity_trace"] == ["consumes", "depends_on"]
+    assert recommended[0]["connectivity_trace"] == ["can_feed"]
     assert recommended[0]["missing_contracts"] == []
     assert recommended[0]["steps"] == [
         {"skill_id": "wisedev-team"},

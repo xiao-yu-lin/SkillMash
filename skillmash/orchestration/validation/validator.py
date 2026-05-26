@@ -26,7 +26,7 @@ def hard_filter_plans(
     hard_fail_missing_required = bool(
         policy.get("hard_fail_missing_required_input", False)
     )
-    strong_relation_types = {"can_feed", "consumes", "aggregates", "produces"}
+    strong_relation_types = {"can_feed"}
 
     for index, plan in enumerate(plans, start=1):
         plan_id = f"plan_{index}"

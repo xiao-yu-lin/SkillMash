@@ -129,7 +129,7 @@ By default, each candidate batch is sent to the LLM twice with the Skill order s
 Confidence thresholds default to `0` so all schema-valid consensus matches are kept. Override them when building if needed:
 
 ```powershell
-.\.venv\Scripts\python.exe examples\graph_build_demo.py --representations_json OUTPUT\representations.json --out_dir .skillmash\index --can_feed_threshold 0.7 --similar_to_threshold 0.6 --substitute_for_threshold 0.8
+.\.venv\Scripts\python.exe examples\graph_build_demo.py --representations_json OUTPUT\representations.json --out_dir .skillmash\index --can_feed_threshold 0.7
 ```
 
 The graph builder first generates deterministic relation candidates from normalized `description`, `tasks`, `inputs`, and `outputs`, then asks the LLM to validate those candidates. It writes:
@@ -146,7 +146,7 @@ Progress is shown with Rich.
   diagnostics.json
 ```
 
-`skill_graph.json` is a Skill-only relation graph. Each Skill node keeps `description`, `tasks`, `inputs`, and `outputs` as properties, and edges are accepted LLM relation edges such as `can_feed`, `similar_to`, and `substitute_for`. `llm_matches.json` keeps both candidates and LLM judgments for traceability.
+`skill_graph.json` is a Skill-only relation graph. Each Skill node keeps `description`, `inputs`, and `outputs` as properties, and edges are accepted `can_feed` relations. `llm_matches.json` keeps both candidates and LLM judgments for traceability.
 
 ## Output Shape
 

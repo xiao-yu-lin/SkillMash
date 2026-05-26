@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import Optional
 
 from skillmash.graph.builder import SkillGraphBuilder
 from skillmash.graph.candidates import CandidateGenerator
@@ -11,8 +11,6 @@ from skillmash.graph.matcher import DEFAULT_THRESHOLDS, OntologyMatcher
 from skillmash.graph.models import BuildManifest, GraphBuildResult, GraphDiagnostic
 from skillmash.graph.relation_resolution import RelationResolver
 from skillmash.graph.registry import SkillRegistryBuilder
-from skillmash.representation.models import SkillRepresentation
-
 
 class GraphBuilder:
     """Build Skill graph artifacts from normalized Skill representations."""
@@ -55,8 +53,6 @@ class GraphBuilder:
             thresholds=_matcher_thresholds(self.matcher),
             llm=_matcher_metadata(self.matcher),
         )
-        slot_taxonomy = _build_slot_taxonomy(registry.ordered_skills())
-        slot_contracts = _build_slot_contracts(slot_taxonomy)
 
         return GraphBuildResult(
             manifest=manifest,
@@ -65,8 +61,6 @@ class GraphBuilder:
             llm_matches=llm_matches,
             graph=graph,
             index=index,
-            slot_taxonomy=slot_taxonomy,
-            slot_contracts=slot_contracts,
             diagnostics=diagnostics,
         )
 
@@ -81,26 +75,3 @@ def _matcher_thresholds(matcher: OntologyMatcher) -> dict:
     if hasattr(matcher, "thresholds"):
         return dict(matcher.thresholds)
     return dict(DEFAULT_THRESHOLDS)
-
-
-def _build_slot_taxonomy(skills: Iterable[SkillRepresentation]) -> dict:
-    slots = set()
-    for skill in skills:
-        slots.update(skill.emit_slot_link_keys())
-        slots.update(skill.consume_slot_link_keys())
-    return {"slots": sorted(slot for slot in slots if slot)}
-
-
-def _build_slot_contracts(slot_taxonomy: dict) -> dict:
-    contract_fields = [
-        "summary",
-        "severity",
-        "evidence",
-        "recommendation",
-        "blocking",
-    ]
-    contracts = {}
-    for slot_name in slot_taxonomy.get("slots", []):
-        if slot_name.endswith("_findings"):
-            contracts[slot_name] = {"required_fields": list(contract_fields)}
-    return {"contracts": contracts}

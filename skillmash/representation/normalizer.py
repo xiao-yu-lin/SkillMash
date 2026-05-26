@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from threading import RLock
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 from skillmash.representation.base_vocab import term_similarity
 from skillmash.representation.io_name_vocab import (
@@ -16,7 +16,6 @@ from skillmash.representation.io_name_vocab import (
 )
 from skillmash.representation.models import (
     ArtifactSpec,
-    Condition,
     ExtractedSkillSchema,
     ExtractionDiagnostic,
     NormalizationConfig,
@@ -25,15 +24,6 @@ from skillmash.representation.models import (
     ParameterSpec,
     RawSkillManifest,
     SkillRepresentation,
-    SlotCandidate,
-    SlotRef,
-)
-from skillmash.representation.semantic_vocab import (
-    HeuristicSemanticResolver,
-    SemanticCandidate,
-    SemanticResolver,
-    SemanticResolution,
-    SemanticVocabulary,
 )
 from skillmash.representation.utils import (
     normalize_human_name,
@@ -60,8 +50,6 @@ class SkillRepresentationNormalizer:
         config: Optional[NormalizationConfig] = None,
         io_name_vocabulary: Optional[IONameVocabulary] = None,
         io_name_resolver: Optional[IONameResolver] = None,
-        task_vocabulary: Optional[SemanticVocabulary] = None,
-        task_resolver: Optional[SemanticResolver] = None,
     ) -> None:
         self.config = config or NormalizationConfig()
         self.io_name_vocabulary = (
@@ -69,15 +57,6 @@ class SkillRepresentationNormalizer:
             or IONameVocabulary.from_config(self.config)
         )
         self.io_name_resolver = io_name_resolver or HeuristicIONameResolver()
-        self.task_vocabulary = (
-            task_vocabulary
-            or SemanticVocabulary.from_aliases(
-                version=self.config.task_vocab_version,
-                max_vocab_size=self.config.max_task_vocab_size,
-                aliases=self.config.task_aliases,
-            )
-        )
-        self.task_resolver = task_resolver or HeuristicSemanticResolver()
         self._io_name_resolution_cache: Dict[str, IONameResolution] = {}
         self._io_name_resolution_cache_lock = RLock()
 
@@ -90,13 +69,6 @@ class SkillRepresentationNormalizer:
         decisions: List[NormalizationDecision] = []
 
         identity = self._normalize_identity(manifest, extracted)
-        tasks = self._normalize_tasks(
-            extracted.tasks,
-            manifest,
-            identity.id,
-            identity.description,
-            decisions,
-        )
         self._prime_io_name_resolutions(manifest, extracted, identity.id)
         inputs = self._normalize_inputs(
             extracted.inputs,
@@ -112,27 +84,14 @@ class SkillRepresentationNormalizer:
             diagnostics,
             decisions,
         )
-        preconditions = self._normalize_conditions(extracted.preconditions)
-        postconditions = self._normalize_conditions(extracted.postconditions)
-        emits_slots, consumes_slots = self._normalize_slots(
-            extracted=extracted,
-            manifest=manifest,
-            skill_id=identity.id,
-            diagnostics=diagnostics,
-        )
 
         representation = SkillRepresentation(
             id=identity.id,
             name=identity.name,
             description=identity.description,
             version=identity.version,
-            tasks=tasks,
             inputs=inputs,
             outputs=outputs,
-            preconditions=preconditions,
-            postconditions=postconditions,
-            emits_slots=emits_slots,
-            consumes_slots=consumes_slots,
         )
         self._validate(representation, manifest, diagnostics)
         return NormalizationResult(
@@ -218,37 +177,6 @@ class SkillRepresentationNormalizer:
             }
         with self._io_name_resolution_cache_lock:
             self._io_name_resolution_cache.update(resolutions)
-
-    def _normalize_tasks(
-        self,
-        raw_tasks: List[str],
-        manifest: RawSkillManifest,
-        skill_id: str,
-        description: str,
-        decisions: List[NormalizationDecision],
-    ) -> List[str]:
-        tasks: List[str] = []
-        seen: set = set()
-        for raw_task in raw_tasks:
-            raw_value = str(raw_task or "").strip()
-            if not raw_value:
-                continue
-            task = self._normalize_semantic_vocab_value(
-                raw_value,
-                description,
-                manifest,
-                skill_id,
-                field="tasks",
-                vocab_name="task_vocab",
-                vocabulary=self.task_vocabulary,
-                resolver=self.task_resolver,
-                decisions=decisions,
-            )
-            if task is None or task in seen:
-                continue
-            tasks.append(task)
-            seen.add(task)
-        return tasks
 
     def _normalize_inputs(
         self,
@@ -767,99 +695,6 @@ class SkillRepresentationNormalizer:
             )
         )
 
-    def _normalize_semantic_vocab_value(
-        self,
-        raw_value: str,
-        description: str,
-        manifest: RawSkillManifest,
-        skill_id: str,
-        *,
-        field: str,
-        vocab_name: str,
-        vocabulary: SemanticVocabulary,
-        resolver: SemanticResolver,
-        decisions: List[NormalizationDecision],
-    ) -> Optional[str]:
-        token = normalize_parameter_name(raw_value)
-        existing = vocabulary.lookup(token)
-        if existing is not None:
-            method = "vocab_alias" if existing != token else "vocab_exact"
-            confidence = 0.95 if existing != token else 1.0
-            self._record_decision(
-                decisions,
-                skill_id=skill_id,
-                path=str(manifest.folder.path),
-                direction="skill",
-                field=field,
-                raw_value=raw_value,
-                token=token,
-                normalized_value=existing,
-                method=method,
-                vocab=vocab_name,
-                vocab_version=vocabulary.version,
-                confidence=confidence,
-            )
-            return existing
-
-        resolution = resolver.resolve(
-            SemanticCandidate(
-                raw_value=raw_value,
-                token=token,
-                field=field,
-                description=description,
-                skill_id=skill_id,
-                path=str(manifest.folder.path),
-            ),
-            vocabulary,
-        )
-        normalized = self._apply_semantic_resolution(token, description, resolution, vocabulary)
-        self._record_decision(
-            decisions,
-            skill_id=skill_id,
-            path=str(manifest.folder.path),
-            direction="skill",
-            field=field,
-            raw_value=raw_value,
-            token=token,
-            normalized_value=normalized or "",
-            method=resolution.action,
-            vocab=vocab_name,
-            vocab_version=vocabulary.version,
-            confidence=resolution.confidence,
-            details={
-                "reason": resolution.reason,
-                "forced_merge": resolution.forced_merge,
-                "vocab_size": vocabulary.size(),
-                "max_vocab_size": vocabulary.max_vocab_size,
-            },
-        )
-        return normalized
-
-    def _apply_semantic_resolution(
-        self,
-        token: str,
-        description: str,
-        resolution: SemanticResolution,
-        vocabulary: SemanticVocabulary,
-    ) -> Optional[str]:
-        if resolution.action == "exclude_non_runtime":
-            return None
-
-        if resolution.action == "create_new" and not vocabulary.is_full():
-            return vocabulary.create_term(
-                resolution.normalized_value or token,
-                alias=token,
-                example=description,
-            )
-
-        target = resolution.normalized_value or vocabulary.closest_term(token)
-        if target is None:
-            return vocabulary.create_term(token, alias=token, example=description)
-        if target not in vocabulary.term_names():
-            target = vocabulary.closest_term(target) or target
-        vocabulary.add_alias(token, target, example=description)
-        return target
-
     def _normalize_data_type(
         self,
         raw_type: str,
@@ -946,388 +781,6 @@ class SkillRepresentationNormalizer:
                 vocab_version=vocab_version,
                 confidence=confidence,
                 details=details or {},
-            )
-        )
-
-    def _normalize_conditions(
-        self, conditions: List[Union[Condition, Dict[str, Any]]]
-    ) -> List[Condition]:
-        normalized: List[Condition] = []
-        for raw in conditions:
-            data = to_dict(raw)
-            condition_type = normalize_token(str(data.get("type") or "constraint"))
-            expression = str(data.get("expression") or "").strip()
-            if not expression:
-                continue
-            normalized.append(
-                Condition(
-                    type=condition_type,
-                    expression=expression,
-                    description=str(data.get("description") or ""),
-                )
-            )
-        return normalized
-
-    def _normalize_slots(
-        self,
-        *,
-        extracted: ExtractedSkillSchema,
-        manifest: RawSkillManifest,
-        skill_id: str,
-        diagnostics: List[ExtractionDiagnostic],
-    ) -> Tuple[List[SlotRef], List[SlotRef]]:
-        emits = self._run_slot_gate_pipeline(
-            direction="emits",
-            raw_candidates=list(extracted.emits_slots),
-            manifest=manifest,
-            skill_id=skill_id,
-            diagnostics=diagnostics,
-        )
-        consumes = self._run_slot_gate_pipeline(
-            direction="consumes",
-            raw_candidates=list(extracted.consumes_slots),
-            manifest=manifest,
-            skill_id=skill_id,
-            diagnostics=diagnostics,
-        )
-        self._role_shape_gate(
-            skill_id=skill_id,
-            manifest=manifest,
-            emits=emits,
-            consumes=consumes,
-            diagnostics=diagnostics,
-        )
-        return emits, consumes
-
-    def _run_slot_gate_pipeline(
-        self,
-        *,
-        direction: str,
-        raw_candidates: List[SlotCandidate],
-        manifest: RawSkillManifest,
-        skill_id: str,
-        diagnostics: List[ExtractionDiagnostic],
-    ) -> List[SlotRef]:
-        # 1) schema gate
-        schema_passed: List[Dict[str, Any]] = []
-        for raw_candidate in raw_candidates:
-            candidate = self._slot_schema_gate(raw_candidate)
-            if candidate is None:
-                self._record_slot_status(
-                    diagnostics=diagnostics,
-                    skill_id=skill_id,
-                    path=str(manifest.folder.path),
-                    kind="",
-                    direction=direction,
-                    candidate_snapshot=self._slot_candidate_snapshot(raw_candidate),
-                    status="dropped_invalid_schema",
-                    reason="candidate must include snake_case kind/parent and confidence in [0,1]",
-                )
-                continue
-            schema_passed.append(candidate)
-
-        # 2) parent gate
-        parent_passed: List[Dict[str, Any]] = []
-        whitelist = set(self.config.slot_parent_whitelist)
-        for candidate in schema_passed:
-            if candidate["parent"] not in whitelist:
-                self._record_slot_status(
-                    diagnostics=diagnostics,
-                    skill_id=skill_id,
-                    path=str(manifest.folder.path),
-                    kind=candidate["name"],
-                    direction=direction,
-                    candidate_snapshot=candidate,
-                    status="dropped_invalid_parent",
-                    reason="parent is outside slot_parent_whitelist",
-                )
-                continue
-            parent_passed.append(candidate)
-
-        # 3) confidence gate
-        confidence_passed: List[Dict[str, Any]] = []
-        for candidate in parent_passed:
-            if candidate["confidence"] < self.config.slot_confidence_threshold:
-                self._record_slot_status(
-                    diagnostics=diagnostics,
-                    skill_id=skill_id,
-                    path=str(manifest.folder.path),
-                    kind=candidate["name"],
-                    direction=direction,
-                    candidate_snapshot=candidate,
-                    status="dropped_low_confidence",
-                    reason=(
-                        "confidence below threshold "
-                        f"{self.config.slot_confidence_threshold:.2f}"
-                    ),
-                )
-                continue
-            confidence_passed.append(candidate)
-
-        # 4) direction gate
-        direction_passed: List[Dict[str, Any]] = []
-        for candidate in confidence_passed:
-            if self._slot_direction_mismatch(direction=direction, candidate=candidate):
-                self._record_slot_status(
-                    diagnostics=diagnostics,
-                    skill_id=skill_id,
-                    path=str(manifest.folder.path),
-                    kind=candidate["name"],
-                    direction=direction,
-                    candidate_snapshot=candidate,
-                    status="dropped_direction_mismatch",
-                    reason="direction-specific naming guard rejected candidate",
-                )
-                continue
-            direction_passed.append(candidate)
-
-        # 5) duplicate gate
-        deduped: List[Dict[str, Any]] = []
-        seen_by_key: Dict[Tuple[str, str], int] = {}
-        for candidate in direction_passed:
-            key = (candidate["name"], candidate["parent"])
-            existing_index = seen_by_key.get(key)
-            if existing_index is None:
-                seen_by_key[key] = len(deduped)
-                deduped.append(candidate)
-                continue
-            existing = deduped[existing_index]
-            if candidate["confidence"] > existing["confidence"]:
-                self._record_slot_status(
-                    diagnostics=diagnostics,
-                    skill_id=skill_id,
-                    path=str(manifest.folder.path),
-                    kind=existing["name"],
-                    direction=direction,
-                    candidate_snapshot=existing,
-                    status="dropped_duplicate",
-                    reason="lower confidence duplicate",
-                )
-                deduped[existing_index] = candidate
-            else:
-                self._record_slot_status(
-                    diagnostics=diagnostics,
-                    skill_id=skill_id,
-                    path=str(manifest.folder.path),
-                    kind=candidate["name"],
-                    direction=direction,
-                    candidate_snapshot=candidate,
-                    status="dropped_duplicate",
-                    reason="lower confidence duplicate",
-                )
-
-        # 6) parent conflict gate (margin-aware)
-        parent_resolved: List[Dict[str, Any]] = []
-        by_name: Dict[str, List[Dict[str, Any]]] = {}
-        for candidate in deduped:
-            by_name.setdefault(candidate["name"], []).append(candidate)
-        for candidates in by_name.values():
-            if len(candidates) == 1:
-                parent_resolved.extend(candidates)
-                continue
-            ordered = sorted(candidates, key=lambda item: item["confidence"], reverse=True)
-            leader = ordered[0]
-            runner_up = ordered[1]
-            if (leader["confidence"] - runner_up["confidence"]) < self.config.slot_parent_conflict_margin:
-                for candidate in ordered:
-                    self._record_slot_status(
-                        diagnostics=diagnostics,
-                        skill_id=skill_id,
-                        path=str(manifest.folder.path),
-                        kind=candidate["name"],
-                        direction=direction,
-                        candidate_snapshot=candidate,
-                        status="dropped_ambiguous_parent",
-                        reason=(
-                            "multiple parent guesses within confidence margin "
-                            f"{self.config.slot_parent_conflict_margin:.2f}"
-                        ),
-                    )
-                continue
-            parent_resolved.append(leader)
-            for candidate in ordered[1:]:
-                self._record_slot_status(
-                    diagnostics=diagnostics,
-                    skill_id=skill_id,
-                    path=str(manifest.folder.path),
-                    kind=candidate["name"],
-                    direction=direction,
-                    candidate_snapshot=candidate,
-                    status="dropped_parent_conflict",
-                    reason="lower confidence parent for the same slot name",
-                )
-
-        # 7) cardinality gate (max per direction kind)
-        ordered = sorted(
-            parent_resolved,
-            key=lambda item: (
-                -item["confidence"],
-                item["name"],
-                item["parent"],
-            ),
-        )
-        kept: List[Dict[str, Any]] = ordered[: self.config.slot_max_per_kind]
-        dropped = ordered[self.config.slot_max_per_kind :]
-        for candidate in dropped:
-            self._record_slot_status(
-                diagnostics=diagnostics,
-                skill_id=skill_id,
-                path=str(manifest.folder.path),
-                kind=candidate["name"],
-                direction=direction,
-                candidate_snapshot=candidate,
-                status="dropped_overflow",
-                reason=(
-                    "cardinality gate overflow: "
-                    f"max={self.config.slot_max_per_kind} per kind"
-                ),
-            )
-
-        accepted: List[SlotRef] = []
-        for candidate in kept:
-            slot_ref = SlotRef(
-                name=candidate["name"],
-                parent=candidate["parent"],
-                confidence=float(candidate["confidence"]),
-                source="llm_slot_candidate",
-                status="accepted",
-                evidence=str(candidate.get("evidence") or ""),
-            )
-            accepted.append(slot_ref)
-            self._record_slot_status(
-                diagnostics=diagnostics,
-                skill_id=skill_id,
-                path=str(manifest.folder.path),
-                kind=slot_ref.name,
-                direction=direction,
-                candidate_snapshot=candidate,
-                status="accepted",
-                reason="passed all slot gates",
-            )
-        return accepted
-
-    def _slot_schema_gate(
-        self,
-        raw_candidate: Union[SlotCandidate, Dict[str, Any], Any],
-    ) -> Optional[Dict[str, Any]]:
-        data = to_dict(raw_candidate)
-        raw_kind = str(data.get("kind") or "").strip()
-        raw_parent = str(data.get("parent_guess") or "").strip()
-        raw_evidence = str(data.get("evidence") or "").strip()
-        if not raw_kind or not raw_parent:
-            return None
-        normalized_kind = normalize_parameter_name(raw_kind)
-        normalized_parent = normalize_parameter_name(raw_parent)
-        if normalized_kind != raw_kind or normalized_parent != raw_parent:
-            return None
-        try:
-            confidence = float(data.get("confidence"))
-        except (TypeError, ValueError):
-            return None
-        if confidence < 0.0 or confidence > 1.0:
-            return None
-        return {
-            "name": normalized_kind,
-            "parent": normalized_parent,
-            "confidence": confidence,
-            "evidence": raw_evidence,
-        }
-
-    def _slot_direction_mismatch(
-        self,
-        *,
-        direction: str,
-        candidate: Dict[str, Any],
-    ) -> bool:
-        name = str(candidate.get("name") or "")
-        if direction == "emits":
-            return name.startswith("consumes_") or name.startswith("input_")
-        if direction == "consumes":
-            return name.startswith("emits_") or name.startswith("output_")
-        return False
-
-    def _role_shape_gate(
-        self,
-        *,
-        skill_id: str,
-        manifest: RawSkillManifest,
-        emits: List[SlotRef],
-        consumes: List[SlotRef],
-        diagnostics: List[ExtractionDiagnostic],
-    ) -> None:
-        emit_parents = {slot.parent for slot in emits}
-        consume_parents = {slot.parent for slot in consumes}
-        if consumes and not emits:
-            diagnostics.append(
-                ExtractionDiagnostic(
-                    stage="slot_gate",
-                    severity="warning",
-                    code="slot_role_shape_warning",
-                    message="skill consumes slots but emits none",
-                    skill_id=skill_id,
-                    path=str(manifest.folder.path),
-                    details={
-                        "emit_parents": sorted(emit_parents),
-                        "consume_parents": sorted(consume_parents),
-                    },
-                )
-            )
-        if "delivery_brief" in consume_parents and "delivery_brief" not in emit_parents:
-            diagnostics.append(
-                ExtractionDiagnostic(
-                    stage="slot_gate",
-                    severity="warning",
-                    code="slot_role_shape_warning",
-                    message="skill consumes delivery_brief without re-emitting delivery_brief",
-                    skill_id=skill_id,
-                    path=str(manifest.folder.path),
-                    details={
-                        "emit_parents": sorted(emit_parents),
-                        "consume_parents": sorted(consume_parents),
-                    },
-                )
-            )
-
-    def _slot_candidate_snapshot(
-        self,
-        raw_candidate: Union[SlotCandidate, Dict[str, Any], Any],
-    ) -> Dict[str, Any]:
-        data = to_dict(raw_candidate)
-        return {
-            "kind": str(data.get("kind") or ""),
-            "parent_guess": str(data.get("parent_guess") or ""),
-            "confidence": data.get("confidence"),
-            "evidence": str(data.get("evidence") or ""),
-        }
-
-    def _record_slot_status(
-        self,
-        *,
-        diagnostics: List[ExtractionDiagnostic],
-        skill_id: str,
-        path: str,
-        kind: str,
-        direction: str,
-        candidate_snapshot: Dict[str, Any],
-        status: str,
-        reason: str,
-    ) -> None:
-        diagnostics.append(
-            ExtractionDiagnostic(
-                stage="slot_gate",
-                severity="info" if status == "accepted" else "warning",
-                code="slot_candidate_processed",
-                message=f"slot candidate {status}",
-                skill_id=skill_id,
-                path=path,
-                details={
-                    "skill_id": skill_id,
-                    "kind": kind,
-                    "direction": direction,
-                    "candidate": candidate_snapshot,
-                    "status": status,
-                    "reason": reason,
-                },
             )
         )
 

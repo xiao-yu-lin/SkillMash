@@ -45,11 +45,3 @@ def write_graph_build_result(
         output_path / "diagnostics.json",
         {"diagnostics": [diagnostic.to_dict() for diagnostic in result.diagnostics]},
     )
-    write_json_file(
-        output_path / "slot_taxonomy.json",
-        result.slot_taxonomy or {"slots": []},
-    )
-    write_json_file(
-        output_path / "slot_contracts.json",
-        result.slot_contracts or {"contracts": {}},
-    )

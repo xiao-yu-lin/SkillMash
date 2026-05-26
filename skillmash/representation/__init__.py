@@ -27,7 +27,6 @@ from skillmash.common.llm import LLMConfig
 from skillmash.representation.manifest import SkillManifestParser
 from skillmash.representation.models import (
     ArtifactSpec,
-    Condition,
     ExtractedSkillSchema,
     ExtractionDiagnostic,
     NormalizationConfig,
@@ -38,8 +37,6 @@ from skillmash.representation.models import (
     RepresentationExtractionResult,
     SkillFolder,
     SkillRepresentation,
-    SlotCandidate,
-    SlotRef,
 )
 from skillmash.representation.normalizer import SkillRepresentationNormalizer
 from skillmash.representation.pipeline import RepresentationExtractor
@@ -84,7 +81,6 @@ __all__ = [
     "SemanticVocabulary",
     # Models
     "ArtifactSpec",
-    "Condition",
     "ExtractedSkillSchema",
     "ExtractionDiagnostic",
     "NormalizationConfig",
@@ -95,8 +91,6 @@ __all__ = [
     "RepresentationExtractionResult",
     "SkillFolder",
     "SkillRepresentation",
-    "SlotCandidate",
-    "SlotRef",
     # Extractor
     "OpenAICompatibleSchemaExtractor",
     "schema_from_llm_payload",

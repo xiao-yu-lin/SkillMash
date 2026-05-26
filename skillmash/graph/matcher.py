@@ -23,8 +23,6 @@ from skillmash.representation.models import SkillRepresentation
 
 DEFAULT_THRESHOLDS = {
     "can_feed": 0.7,
-    "similar_to": 0.65,
-    "substitute_for": 0.0,
 }
 
 
@@ -379,7 +377,7 @@ def _normalize_match(
         if source_outputs and target_inputs:
             if not (source_outputs & evidence_outputs and target_inputs & evidence_inputs):
                 errors.append("supporting_fields do not match candidate evidence")
-        elif not (evidence_outputs & evidence_inputs):
+        elif not (evidence_outputs and evidence_inputs):
             errors.append("can_feed has no supported output/input pair")
 
     accepted = not errors and confidence >= thresholds.get(relation_type, 1.0)
@@ -594,7 +592,6 @@ def _skill_context(skill: SkillRepresentation) -> Dict[str, Any]:
         "id": skill.id,
         "name": skill.name,
         "description": skill.description,
-        "tasks": list(skill.tasks),
         "inputs": [item.to_dict() for item in skill.inputs],
         "outputs": [item.to_dict() for item in skill.outputs],
     }
@@ -609,9 +606,8 @@ Input contains:
 - candidates: deterministic relation candidates.
 - allowed_relation_types.
 
-For each candidate pair, decide which relation_hints are valid. A single
-candidate may produce multiple matches, for example both similar_to and
-substitute_for. Do not invent new skills, relation types, or candidate pairs.
+For each candidate pair, decide whether the suggested can_feed relation is
+valid. Do not invent new skills, relation types, or candidate pairs.
 If a candidate direction is wrong, omit it or return it with low confidence
 and a reason.
 
@@ -622,15 +618,13 @@ Return:
       "candidate_id": "skill_a<->skill_b",
       "source_id": "directed source skill id",
       "target_id": "directed target skill id",
-      "relation_type": "can_feed|similar_to|substitute_for",
+      "relation_type": "can_feed",
       "confidence": 0.0-1.0,
       "method": "llm_ontology_match",
       "reasons": ["short evidence-based reason"],
       "supporting_fields": {
         "source_outputs": ["..."],
-        "target_inputs": ["..."],
-        "source_tasks": ["..."],
-        "target_tasks": ["..."]
+        "target_inputs": ["..."]
       }
     }
   ]
@@ -638,6 +632,4 @@ Return:
 
 Relation meanings:
 - can_feed: source output can satisfy target input.
-- similar_to: skills have similar purpose or capability.
-- substitute_for: source can plausibly replace target in similar contexts.
 """

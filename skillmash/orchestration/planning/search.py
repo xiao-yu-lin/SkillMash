@@ -178,7 +178,6 @@ def state_to_plan(
             PlanStep(
                 skill_id=current_skill_id,
                 name=skill.get("name", current_skill_id),
-                tasks=list(skill.get("tasks", [])),
                 inputs=[
                     {"name": item.get("name"), "type": item.get("type")}
                     for item in skill.get("inputs", [])
@@ -322,16 +321,12 @@ def plan_goal_score(
 
 def skill_goal_score(skill: dict[str, Any], goal_terms: set[str]) -> float:
     terms = skill_terms(skill)
-    task_terms = set()
-    for task in skill.get("tasks", []):
-        task_terms.update(tokenize(task))
     output_terms = set()
     for output in skill.get("outputs", []):
         output_terms.update(tokenize(output.get("name", "")))
         output_terms.update(tokenize(output.get("description", "")))
     return (
         len(terms & goal_terms)
-        + len(task_terms & goal_terms) * 3.0
         + len(output_terms & goal_terms) * 2.0
     )
 
@@ -342,7 +337,6 @@ def skill_terms(skill: dict[str, Any]) -> set[str]:
         skill.get("name", ""),
         skill.get("description", ""),
     ]
-    chunks.extend(skill.get("tasks", []))
     for item in skill.get("inputs", []):
         chunks.extend(
             [item.get("name", ""), item.get("type", ""), item.get("description", "")]

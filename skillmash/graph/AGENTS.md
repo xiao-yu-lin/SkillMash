@@ -21,8 +21,6 @@ retrieval and orchestration.
 Supported relation types are:
 
 - `can_feed`: a source Skill can produce an artifact usable by a target Skill.
-- `similar_to`: Skills provide overlapping or related capabilities.
-- `substitute_for`: one Skill can reasonably replace another in a plan.
 
 Add new relation types only with matching model, validation, writer, index, and
 test updates.

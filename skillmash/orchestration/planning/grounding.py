@@ -60,7 +60,6 @@ def ground_query_with_llm(
     payload = {
         "query": query,
         "artifact_vocabulary": artifact_vocab_payload(artifacts),
-        "task_vocabulary": task_vocab_payload(artifacts),
         "output_vocabulary": sorted(artifacts.index.get("by_output", {}))[:200],
     }
     raw = llm_client.complete_json(
@@ -89,7 +88,7 @@ def known_artifact_refs(artifacts: BuildArtifacts) -> dict[tuple[str, str], Arti
 
 def ground_goal_terms(*, query_terms: set[str], artifacts: BuildArtifacts) -> set[str]:
     goal_terms = set(query_terms)
-    for bucket_name in ("by_task", "by_output", "by_text_term"):
+    for bucket_name in ("by_output", "by_text_term"):
         bucket = artifacts.index.get(bucket_name, {})
         for key in bucket:
             key_terms = tokenize(key)
@@ -146,16 +145,6 @@ def artifact_vocab_payload(artifacts: BuildArtifacts) -> list[dict[str, Any]]:
             }
         )
     return payload[:300]
-
-
-def task_vocab_payload(artifacts: BuildArtifacts) -> list[str]:
-    terms = {
-        str(term.get("name"))
-        for term in vocab_terms(artifacts.task_vocab)
-        if term.get("name")
-    }
-    terms.update(str(key) for key in artifacts.index.get("by_task", {}))
-    return sorted(terms)[:200]
 
 
 def normalize_llm_grounding(

@@ -40,7 +40,6 @@ class SkillIndexBuilder:
     def build(self, registry: SkillRegistry, graph: SkillGraph) -> SkillIndex:
         by_output: Dict[str, Set[str]] = defaultdict(set)
         by_input: Dict[str, Set[str]] = defaultdict(set)
-        by_task: Dict[str, Set[str]] = defaultdict(set)
         by_data_type: Dict[str, Set[str]] = defaultdict(set)
         by_text_term: Dict[str, Set[str]] = defaultdict(set)
         by_slot: Dict[str, Set[str]] = defaultdict(set)
@@ -56,8 +55,6 @@ class SkillIndexBuilder:
                 if not self.lexicon.is_generic_io_name(parameter.name):
                     by_input[parameter.name].add(skill.id)
                 by_data_type[parameter.type].add(skill.id)
-            for task in skill.tasks:
-                by_task[task].add(skill.id)
             for term in _skill_terms(skill):
                 by_text_term[term].add(skill.id)
 
@@ -89,25 +86,6 @@ class SkillIndexBuilder:
                         upstream_by_input[name].add(source_id)
                         downstream_by_output[name].add(target_id)
 
-            if edge.type == "produces" and edge.source.startswith("skill:"):
-                source_id = edge.source.removeprefix("skill:")
-                if edge.target.startswith("slot:"):
-                    slot_name = edge.target.removeprefix("slot:")
-                    by_slot[slot_name].add(source_id)
-                if edge.target.startswith("artifact:"):
-                    artifact_name = _artifact_name_from_id(edge.target)
-                    if artifact_name:
-                        by_artifact[artifact_name].add(source_id)
-
-            if edge.type == "aggregates" and edge.source.startswith("slot:") and edge.target.startswith("skill:"):
-                slot_name = edge.source.removeprefix("slot:")
-                target_id = edge.target.removeprefix("skill:")
-                by_aggregator[slot_name].add(target_id)
-
-            if edge.type == "consumes" and edge.source.startswith("artifact:") and edge.target.startswith("skill:"):
-                artifact_name = _artifact_name_from_id(edge.source)
-                if artifact_name:
-                    by_artifact[artifact_name].add(edge.target.removeprefix("skill:"))
 
         return SkillIndex(
             by_output=_freeze_index(
@@ -118,7 +96,6 @@ class SkillIndexBuilder:
                 by_input,
                 max_bucket_size=self.max_io_bucket_size,
             ),
-            by_task=_freeze_index(by_task),
             by_data_type=_freeze_index(by_data_type),
             neighbors=_freeze_index(neighbors),
             upstream_by_input=_freeze_index(
@@ -154,7 +131,6 @@ def _freeze_index(
 
 def _skill_terms(skill) -> Set[str]:
     chunks: List[str] = [skill.id, skill.name, skill.description]
-    chunks.extend(skill.tasks)
     chunks.extend(item.name for item in skill.inputs)
     chunks.extend(item.description for item in skill.inputs)
     chunks.extend(item.name for item in skill.outputs)
@@ -168,9 +144,3 @@ def _skill_terms(skill) -> Set[str]:
 def _tokenize(text: str) -> Set[str]:
     return _GRAPH_TERM_LEXICON.tokenize(text)
 
-
-def _artifact_name_from_id(node_id: str) -> str:
-    parts = node_id.split(":", 2)
-    if len(parts) < 3:
-        return ""
-    return parts[1]

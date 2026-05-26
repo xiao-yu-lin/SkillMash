@@ -85,11 +85,6 @@ def main() -> None:
         help="Also print raw candidate plans after recommended plans.",
     )
     parser.add_argument(
-        "--allow_similar_slot_substitute",
-        action="store_true",
-        help="Allow similar_to edges in slot substitute/grouping. Disabled by default.",
-    )
-    parser.add_argument(
         "--log_level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -114,7 +109,6 @@ def main() -> None:
         top_m=args.top_m,
         top_k=args.top_k,
         include_candidates=args.show_candidates,
-        allow_similar_slot_substitute=args.allow_similar_slot_substitute,
     )
     result = planner.plan(query)
     if args.json:

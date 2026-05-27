@@ -77,12 +77,18 @@ class OpenAICompatibleSchemaExtractor:
 def schema_from_llm_payload(payload: Dict[str, Any]) -> ExtractedSkillSchema:
     """Convert a raw LLM JSON payload into ExtractedSkillSchema."""
 
+    warnings = [str(item) for item in payload.get("warnings", [])]
+    raw_output_notes = payload.get("raw_output_notes", [])
+    if isinstance(raw_output_notes, str):
+        raw_output_notes = [raw_output_notes]
+    warnings.extend(str(item) for item in raw_output_notes if str(item).strip())
+
     return ExtractedSkillSchema(
         description=str(payload.get("description") or ""),
         inputs=[_parameter_from_payload(item) for item in payload.get("inputs", [])],
         outputs=[_artifact_from_payload(item) for item in payload.get("outputs", [])],
         confidence=payload.get("confidence"),
-        warnings=[str(item) for item in payload.get("warnings", [])],
+        warnings=warnings,
     )
 
 def _parameter_from_payload(payload: Dict[str, Any]) -> ParameterSpec:
@@ -128,6 +134,25 @@ Required JSON object fields:
 - outputs: array of {name, type, description, optional schema_ref}
 - confidence: number between 0 and 1
 - warnings: array of strings
+Optional JSON object fields:
+- raw_output_notes: array of strings describing raw API or script return fields
+  that helped your reasoning but should not be recorded as output artifacts.
+
+Read the entire SKILL.md, not only input/output tables. Sections such as
+"when to use", "output example", "return format", "notes", "summary", and final
+instructions may enrich or override formal API field tables.
+
+Outputs must represent user-facing/downstream deliverables: artifacts the Skill
+promises to hand to the user or to another Skill. Do not emit raw API/control fields as outputs.
+This includes errorCode, errorMsg, status, logs, debug fields, or internal JSON
+containers such as raw result, imageResult, or textResult, unless the document
+says that raw structure is the actual deliverable.
+
+If a raw API response contains a useful deliverable inside a nested field,
+extract the deliverable as a semantic output instead of the raw container. For
+example, textResult[].translateText may become translated_text with type text.
+If the document says to send, show, return, or provide something in markdown,
+markdown delivery instructions must be represented as markdown outputs.
 
 Use name for the semantic role and type for the data representation that is
 passed between Skills.

@@ -9,6 +9,7 @@ from skillmash.orchestration.artifacts import BuildArtifacts
 from skillmash.orchestration.planning.models import (
     ArtifactRef,
     GroundedQuery,
+    InferredInput,
     OrchestrationPlan,
     PlanStep,
     SearchState,
@@ -32,6 +33,7 @@ def search_plans(
     entry_ids = entry_skill_ids(
         artifacts=artifacts,
         available=initial_available,
+        inferred_inputs=grounded.inferred_inputs,
         goal_terms=grounded.goal_terms,
         max_entry_skills=max_entry_skills,
     )
@@ -64,6 +66,7 @@ def search_plans(
         next_ids = next_skill_ids(
             last_id=last_id,
             state=state,
+            inferred_inputs=grounded.inferred_inputs,
             goal_terms=grounded.goal_terms,
             outgoing_edges=outgoing_edges,
             can_feed_edges=can_feed_edges,
@@ -105,6 +108,7 @@ def entry_skill_ids(
     *,
     artifacts: BuildArtifacts,
     available: frozenset[tuple[str, str]],
+    inferred_inputs: list[InferredInput],
     goal_terms: set[str],
     max_entry_skills: int,
 ) -> list[str]:
@@ -113,7 +117,11 @@ def entry_skill_ids(
         current_skill_id = skill.get("id", "")
         if not current_skill_id:
             continue
-        input_score = input_coverage_score(skill, available)
+        input_score = input_coverage_score(
+            skill,
+            available,
+            inferred_inputs=inferred_inputs,
+        )
         goal_score = skill_goal_score(skill, goal_terms)
         if input_score <= 0 and goal_score <= 0:
             continue
@@ -128,6 +136,7 @@ def next_skill_ids(
     *,
     last_id: str,
     state: SearchState,
+    inferred_inputs: list[InferredInput],
     goal_terms: set[str],
     outgoing_edges: dict[str, list[int]],
     can_feed_edges: list[dict[str, Any]],
@@ -144,7 +153,12 @@ def next_skill_ids(
             continue
         score = (
             float(edge.get("confidence") or 0.0) * 4.0
-            + input_coverage_score(target, state.available) * 2.0
+            + input_coverage_score(
+                target,
+                state.available,
+                inferred_inputs=inferred_inputs,
+            )
+            * 2.0
             + skill_goal_score(target, goal_terms)
         )
         candidates.append((score, edge_index, target_id))
@@ -169,7 +183,12 @@ def state_to_plan(
 
     for current_skill_id in state.skill_ids:
         skill = skill_by_id[current_skill_id]
-        missing = missing_inputs(skill, available)
+        filled = filled_inputs(skill, grounded.inferred_inputs)
+        missing = missing_inputs(
+            skill,
+            available,
+            inferred_inputs=grounded.inferred_inputs,
+        )
         all_missing.extend({**item, "skill_id": current_skill_id} for item in missing)
         outputs = output_keys(skill)
         produced.update(outputs)
@@ -187,6 +206,7 @@ def state_to_plan(
                     for item in skill.get("outputs", [])
                 ],
                 missing_inputs=missing,
+                filled_inputs=filled,
             )
         )
         score = skill_goal_score(skill, grounded.goal_terms)
@@ -232,7 +252,12 @@ def build_outgoing_edges(edges: list[dict[str, Any]]) -> dict[str, list[int]]:
     return outgoing
 
 
-def input_coverage_score(skill: dict[str, Any], available: Iterable[tuple[str, str]]) -> float:
+def input_coverage_score(
+    skill: dict[str, Any],
+    available: Iterable[tuple[str, str]],
+    *,
+    inferred_inputs: list[InferredInput] | None = None,
+) -> float:
     required = [
         (str(item.get("name")), str(item.get("type") or "unknown"))
         for item in skill.get("inputs", [])
@@ -241,7 +266,13 @@ def input_coverage_score(skill: dict[str, Any], available: Iterable[tuple[str, s
     if not required:
         return 1.0
     available_set = set(available)
-    matched = sum(1 for item in required if artifact_matches(item, available_set))
+    inferred_set = inferred_input_keys(str(skill.get("id") or ""), inferred_inputs or [])
+    matched = sum(
+        1
+        for item in required
+        if artifact_matches(item, available_set)
+        or inferred_input_matches(item, inferred_set)
+    )
     return matched / len(required)
 
 
@@ -267,16 +298,64 @@ def consumed_user_artifact_count(
 def missing_inputs(
     skill: dict[str, Any],
     available: Iterable[tuple[str, str]],
+    *,
+    inferred_inputs: list[InferredInput] | None = None,
 ) -> list[dict[str, Any]]:
     available_set = set(available)
+    inferred_set = inferred_input_keys(str(skill.get("id") or ""), inferred_inputs or [])
     missing = []
     for item in skill.get("inputs", []):
         if not item.get("required", True):
             continue
         expected = (str(item.get("name")), str(item.get("type") or "unknown"))
-        if not artifact_matches(expected, available_set):
+        if not artifact_matches(expected, available_set) and not inferred_input_matches(
+            expected,
+            inferred_set,
+        ):
             missing.append({"name": expected[0], "type": expected[1]})
     return missing
+
+
+def filled_inputs(
+    skill: dict[str, Any],
+    inferred_inputs: list[InferredInput],
+) -> list[dict[str, Any]]:
+    skill_id_ = str(skill.get("id") or "")
+    input_keys = {
+        (str(item.get("name")), str(item.get("type") or "unknown"))
+        for item in skill.get("inputs", [])
+        if item.get("name")
+    }
+    filled = []
+    for inferred_input in inferred_inputs:
+        if inferred_input.skill_id != skill_id_:
+            continue
+        if inferred_input_matches((inferred_input.name, inferred_input.type), input_keys):
+            filled.append(inferred_input.to_dict())
+    return filled
+
+
+def inferred_input_keys(
+    skill_id_: str,
+    inferred_inputs: list[InferredInput],
+) -> set[tuple[str, str]]:
+    return {
+        (item.name, item.type)
+        for item in inferred_inputs
+        if item.skill_id == skill_id_
+    }
+
+
+def inferred_input_matches(
+    expected: tuple[str, str],
+    inferred: set[tuple[str, str]],
+) -> bool:
+    name, type_ = expected
+    return any(
+        candidate_name == name
+        and (candidate_type == type_ or candidate_type == "unknown" or type_ == "unknown")
+        for candidate_name, candidate_type in inferred
+    )
 
 
 def artifact_matches(
@@ -502,6 +581,7 @@ def edge_plan_item(edge: dict[str, Any]) -> dict[str, Any]:
         "target_id": skill_id(edge.get("target")),
         "confidence": edge.get("confidence"),
         "method": edge.get("method"),
+        "port_mappings": supporting_fields.get("port_mappings", [])[:5],
         "source_outputs": supporting_fields.get("source_outputs", [])[:3],
         "target_inputs": supporting_fields.get("target_inputs", [])[:3],
         "reasons": evidence.get("reasons", [])[:3],

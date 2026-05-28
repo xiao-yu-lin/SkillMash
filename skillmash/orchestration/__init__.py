@@ -4,6 +4,7 @@ from skillmash.orchestration.artifacts import BuildArtifacts, load_build_artifac
 from skillmash.orchestration.planner import (
     ArtifactRef,
     GroundedQuery,
+    InferredInput,
     OrchestrationPlan,
     PlanningConfig,
     PlanStep,
@@ -14,6 +15,7 @@ __all__ = [
     "ArtifactRef",
     "BuildArtifacts",
     "GroundedQuery",
+    "InferredInput",
     "OrchestrationPlan",
     "PlanningConfig",
     "PlanStep",

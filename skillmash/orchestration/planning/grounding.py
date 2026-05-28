@@ -11,7 +11,12 @@ from skillmash.orchestration.planning.constants import (
     DEFAULT_USER_ARTIFACTS,
     LLM_GROUNDING_SYSTEM_PROMPT,
 )
-from skillmash.orchestration.planning.models import ArtifactRef, GroundedQuery, GroundingClient
+from skillmash.orchestration.planning.models import (
+    ArtifactRef,
+    GroundedQuery,
+    GroundingClient,
+    InferredInput,
+)
 from skillmash.orchestration.planning.utils import tokenize
 
 
@@ -48,6 +53,7 @@ def ground_query(
         query_terms=query_terms,
         available_artifacts=available,
         goal_terms=goal_terms,
+        inferred_inputs=llm_grounding.get("inferred_inputs", []),
     )
 
 
@@ -71,7 +77,11 @@ def ground_query_with_llm(
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Invalid query grounding JSON: {raw[:500]}") from exc
-    return normalize_llm_grounding(parsed, known_artifact_refs(artifacts))
+    return normalize_llm_grounding(
+        parsed,
+        known_artifact_refs(artifacts),
+        known_inferred_input_refs(artifacts),
+    )
 
 
 def known_artifact_refs(artifacts: BuildArtifacts) -> dict[tuple[str, str], ArtifactRef]:
@@ -83,6 +93,27 @@ def known_artifact_refs(artifacts: BuildArtifacts) -> dict[tuple[str, str], Arti
             source="llm_grounding",
         )
         refs[ref.key] = ref
+    return refs
+
+
+def known_inferred_input_refs(
+    artifacts: BuildArtifacts,
+) -> dict[tuple[str, str, str], InferredInput]:
+    refs = {}
+    for skill in artifacts.skills:
+        skill_id = str(skill.get("id") or "")
+        if not skill_id:
+            continue
+        for item in skill.get("inputs", []):
+            name = str(item.get("name") or "")
+            if not name:
+                continue
+            type_ = str(item.get("type") or "unknown")
+            refs[(skill_id, name, type_)] = InferredInput(
+                skill_id=skill_id,
+                name=name,
+                type=type_,
+            )
     return refs
 
 
@@ -150,6 +181,7 @@ def artifact_vocab_payload(artifacts: BuildArtifacts) -> list[dict[str, Any]]:
 def normalize_llm_grounding(
     payload: dict[str, Any],
     known_refs: dict[tuple[str, str], ArtifactRef],
+    known_inferred_refs: dict[tuple[str, str, str], InferredInput] | None = None,
 ) -> dict[str, Any]:
     normalized_artifacts = []
     for item in payload.get("available_artifacts", []):
@@ -171,10 +203,71 @@ def normalize_llm_grounding(
     goal_terms = set()
     for term in payload.get("goal_terms", []):
         goal_terms.update(tokenize(str(term)))
+    inferred_inputs = normalize_inferred_inputs(
+        payload.get("inferred_inputs", []),
+        known_inferred_refs or {},
+    )
     return {
         "available_artifacts": normalized_artifacts,
+        "inferred_inputs": inferred_inputs,
         "goal_terms": goal_terms,
     }
+
+
+INFERABLE_INPUT_NAMES = {
+    "auto_emotion",
+    "backend",
+    "category",
+    "command",
+    "format",
+    "html",
+    "language_code",
+    "model_id",
+    "output_spec",
+    "publish_channel",
+    "song_type",
+    "target_language",
+    "variant_mode",
+}
+
+
+def normalize_inferred_inputs(
+    values: Any,
+    known_refs: dict[tuple[str, str, str], InferredInput],
+) -> list[InferredInput]:
+    if not isinstance(values, list):
+        return []
+    normalized = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        skill_id = str(item.get("skill_id") or "")
+        name = str(item.get("name") or "")
+        if not skill_id or not name or name not in INFERABLE_INPUT_NAMES:
+            continue
+        type_ = str(item.get("type") or "unknown")
+        ref = known_refs.get((skill_id, name, type_))
+        if ref is None:
+            matching = [
+                candidate
+                for key, candidate in known_refs.items()
+                if key[0] == skill_id and key[1] == name
+            ]
+            ref = matching[0] if matching else None
+        if ref is None:
+            continue
+        value = item.get("value")
+        if value is None or str(value).strip() == "":
+            continue
+        normalized.append(
+            InferredInput(
+                skill_id=ref.skill_id,
+                name=ref.name,
+                type=ref.type,
+                value=value,
+            )
+        )
+    return normalized
 
 
 def merge_artifacts(

@@ -258,6 +258,49 @@ def test_candidate_generator_allows_markdown_output_to_feed_text_input() -> None
     assert evidence["matched_type"] == "markdown->text"
 
 
+def test_candidate_generator_adds_content_port_mappings() -> None:
+    registry = SkillRegistryBuilder().register(
+        [
+            _image_translation_skill(),
+            _general_writing_skill(),
+            _email_skill(),
+        ]
+    )
+
+    candidates = CandidateGenerator().generate(registry)
+
+    translation_to_writing = next(
+        candidate
+        for candidate in candidates
+        if candidate.key == "general-writing<->xiaoyi-image-translation"
+    )
+    translation_evidence = translation_to_writing.evidence["directions"][
+        "xiaoyi-image-translation->general-writing"
+    ]
+    translation_ports = {
+        (mapping["source_output"], mapping["target_input"])
+        for mapping in translation_evidence["port_mappings"]
+    }
+    assert ("translated_text", "query") in translation_ports
+    assert ("ocr_text", "query") in translation_ports
+
+    writing_to_email = next(
+        candidate
+        for candidate in candidates
+        if candidate.key == "general-writing<->imap-smtp-email"
+    )
+    email_evidence = writing_to_email.evidence["directions"][
+        "general-writing->imap-smtp-email"
+    ]
+    email_ports = {
+        (mapping["source_output"], mapping["target_input"])
+        for mapping in email_evidence["port_mappings"]
+    }
+    assert ("document", "body") in email_ports
+    assert ("document", "command") not in email_ports
+    assert len(email_evidence["port_mappings"]) <= 12
+
+
 def test_candidate_generator_ignores_high_fanout_text_terms() -> None:
     registry = SkillRegistryBuilder().register(
         [
@@ -376,6 +419,95 @@ def test_validate_llm_matches_parses_decorated_supporting_field_strings() -> Non
     assert diagnostics == []
     assert len(matches) == 1
     assert matches[0].accepted is True
+
+
+def test_validate_llm_matches_accepts_candidate_port_mapping() -> None:
+    registry = SkillRegistryBuilder().register(
+        [_general_writing_skill(), _email_skill()]
+    )
+    candidates = CandidateGenerator().generate(registry)
+    candidate = next(
+        item
+        for item in candidates
+        if item.key == "general-writing<->imap-smtp-email"
+    )
+
+    matches, diagnostics = validate_llm_matches(
+        {
+            "matches": [
+                {
+                    "candidate_id": candidate.key,
+                    "source_id": "general-writing",
+                    "target_id": "imap-smtp-email",
+                    "relation_type": "can_feed",
+                    "confidence": 0.91,
+                    "reasons": ["The generated document can be used as email body."],
+                    "supporting_fields": {
+                        "port_mappings": [
+                            {
+                                "source_output": "document",
+                                "target_input": "body",
+                            }
+                        ],
+                        "source_outputs": ["document"],
+                        "target_inputs": ["body"],
+                    },
+                }
+            ]
+        },
+        registry,
+        [candidate],
+    )
+
+    assert diagnostics == []
+    assert len(matches) == 1
+    assert matches[0].accepted is True
+
+
+def test_validate_llm_matches_rejects_unknown_port_mapping() -> None:
+    registry = SkillRegistryBuilder().register(
+        [_general_writing_skill(), _email_skill()]
+    )
+    candidates = CandidateGenerator().generate(registry)
+    candidate = next(
+        item
+        for item in candidates
+        if item.key == "general-writing<->imap-smtp-email"
+    )
+
+    matches, diagnostics = validate_llm_matches(
+        {
+            "matches": [
+                {
+                    "candidate_id": candidate.key,
+                    "source_id": "general-writing",
+                    "target_id": "imap-smtp-email",
+                    "relation_type": "can_feed",
+                    "confidence": 0.91,
+                    "reasons": ["This field pair was not in the candidate."],
+                    "supporting_fields": {
+                        "port_mappings": [
+                            {
+                                "source_output": "document",
+                                "target_input": "command",
+                            }
+                        ],
+                        "source_outputs": ["document"],
+                        "target_inputs": ["command"],
+                    },
+                }
+            ]
+        },
+        registry,
+        [candidate],
+    )
+
+    assert matches[0].accepted is False
+    assert any(
+        "port_mappings do not match candidate evidence"
+        in diagnostic.details["errors"]
+        for diagnostic in diagnostics
+    )
 
 
 def test_graph_builder_adds_deterministic_exact_io_edges() -> None:
@@ -518,6 +650,89 @@ def _generic_report_skill() -> SkillRepresentation:
         version="1.0.0",
         inputs=[ParameterSpec(name="review_report", type="markdown")],
         outputs=[ArtifactSpec(name="review_report", type="markdown")],
+    )
+
+
+def _image_translation_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="xiaoyi-image-translation",
+        name="Image Translation",
+        description="Recognize and translate text in images.",
+        version="1.0.0",
+        inputs=[
+            ParameterSpec(name="image_url", type="url", required=False),
+            ParameterSpec(name="target_language", type="text"),
+        ],
+        outputs=[
+            ArtifactSpec(
+                name="translated_text",
+                type="text",
+                description="Translated text recognized from the image.",
+            ),
+            ArtifactSpec(
+                name="ocr_text",
+                type="text",
+                description="Original OCR text recognized from the image.",
+            ),
+        ],
+    )
+
+
+def _general_writing_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="general-writing",
+        name="General Writing",
+        description="Produce a written markdown document from a user request.",
+        version="1.0.0",
+        inputs=[
+            ParameterSpec(
+                name="query",
+                type="text",
+                description="The user's writing request or topic.",
+            ),
+            ParameterSpec(
+                name="sources",
+                type="json",
+                required=False,
+                description="Source material used to support the writing.",
+            ),
+        ],
+        outputs=[
+            ArtifactSpec(
+                name="document",
+                type="markdown",
+                description="Written markdown document.",
+            )
+        ],
+    )
+
+
+def _email_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="imap-smtp-email",
+        name="IMAP SMTP Email",
+        description="Read and send email via IMAP and SMTP.",
+        version="1.0.0",
+        inputs=[
+            ParameterSpec(
+                name="command",
+                type="text",
+                description="Operation to perform: check, fetch, send.",
+            ),
+            ParameterSpec(
+                name="to",
+                type="text",
+                required=False,
+                description="Recipient email addresses.",
+            ),
+            ParameterSpec(
+                name="body",
+                type="text",
+                required=False,
+                description="Plain text or HTML email body content.",
+            ),
+        ],
+        outputs=[ArtifactSpec(name="confirmation", type="text")],
     )
 
 

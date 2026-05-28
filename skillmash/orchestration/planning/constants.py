@@ -19,11 +19,18 @@ Rules:
   attach, uploaded, or want to use that artifact. Do not invent artifacts.
 - Select goal_terms from the provided task/output/vocabulary terms only.
 - Preserve canonical artifact names and types exactly as provided.
+- Select inferred_inputs only for control/configuration inputs whose value is
+  directly implied by the request, such as command=send or target_language=zh-CHS.
+- Do not infer private/user data or content payloads such as recipients,
+  attachments, files, email body, or document text.
 - If uncertain, omit the item.
 
 Schema:
 {
   "available_artifacts": [{"name": "api_spec", "type": "yaml"}],
+  "inferred_inputs": [
+    {"skill_id": "email", "name": "command", "type": "text", "value": "send"}
+  ],
   "goal_terms": ["review", "audit"]
 }
 """

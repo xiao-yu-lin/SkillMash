@@ -359,10 +359,16 @@ def _normalize_match(
     if relation_type == "can_feed" and candidate is not None:
         source_outputs = set(_field_names(supporting_fields.get("source_outputs", [])))
         target_inputs = set(_field_names(supporting_fields.get("target_inputs", [])))
+        requested_port_mappings = _port_mapping_pairs(
+            supporting_fields.get("port_mappings", [])
+        )
         directional_evidence = _directional_evidence(
             candidate,
             source_id,
             target_id,
+        )
+        evidence_port_mappings = _port_mapping_pairs(
+            directional_evidence.get("port_mappings", [])
         )
         evidence_outputs = {
             item.get("name")
@@ -374,10 +380,17 @@ def _normalize_match(
             for item in directional_evidence.get("target_inputs", [])
             if isinstance(item, dict)
         }
-        if source_outputs and target_inputs:
+        if requested_port_mappings:
+            if not requested_port_mappings <= evidence_port_mappings:
+                errors.append("port_mappings do not match candidate evidence")
+            supporting_fields = _complete_supporting_fields_from_port_mappings(
+                supporting_fields,
+                requested_port_mappings,
+            )
+        elif source_outputs and target_inputs:
             if not (source_outputs & evidence_outputs and target_inputs & evidence_inputs):
                 errors.append("supporting_fields do not match candidate evidence")
-        elif not (evidence_outputs and evidence_inputs):
+        elif not ((evidence_outputs and evidence_inputs) or evidence_port_mappings):
             errors.append("can_feed has no supported output/input pair")
 
     accepted = not errors and confidence >= thresholds.get(relation_type, 1.0)
@@ -443,6 +456,30 @@ def _field_name_from_string(value: str) -> str:
     head = text.split(":", 1)[0].strip()
     head = head.split("(", 1)[0].strip()
     return head
+
+
+def _port_mapping_pairs(values: Any) -> set[tuple[str, str]]:
+    if not isinstance(values, list):
+        return set()
+    pairs = set()
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        source_output = str(value.get("source_output") or "").strip()
+        target_input = str(value.get("target_input") or "").strip()
+        if source_output and target_input:
+            pairs.add((source_output, target_input))
+    return pairs
+
+
+def _complete_supporting_fields_from_port_mappings(
+    supporting_fields: Dict[str, Any],
+    pairs: set[tuple[str, str]],
+) -> Dict[str, Any]:
+    completed = dict(supporting_fields)
+    completed.setdefault("source_outputs", sorted({source for source, _ in pairs}))
+    completed.setdefault("target_inputs", sorted({target for _, target in pairs}))
+    return completed
 
 
 def _directional_evidence(
@@ -623,6 +660,9 @@ Return:
       "method": "llm_ontology_match",
       "reasons": ["short evidence-based reason"],
       "supporting_fields": {
+        "port_mappings": [
+          {"source_output": "output_name", "target_input": "input_name"}
+        ],
         "source_outputs": ["..."],
         "target_inputs": ["..."]
       }
@@ -632,4 +672,6 @@ Return:
 
 Relation meanings:
 - can_feed: source output can satisfy target input.
+Choose port_mappings only from the candidate evidence. Prefer content inputs
+such as body/query/text/sources over control inputs such as command/format.
 """

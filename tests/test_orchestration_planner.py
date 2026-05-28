@@ -5,13 +5,20 @@ from pathlib import Path
 
 from skillmash.graph import GraphBuilder, LLMMatch, write_graph_build_result
 from skillmash.orchestration import (
+    BuildArtifacts,
     PlanningConfig,
     SkillOrchestrator,
     load_build_artifacts,
 )
+from skillmash.orchestration.planning.models import ArtifactRef, GroundedQuery, SearchState
 from skillmash.orchestration.planning.orchestrator import (
     _augment_with_structural_incomplete_plans,
     _annotate_plan_execution_feasibility,
+)
+from skillmash.orchestration.planning.search import (
+    build_outgoing_edges,
+    search_plans,
+    select_beam_states,
 )
 from skillmash.representation import (
     ArtifactSpec,
@@ -138,10 +145,196 @@ class FirstPlanRanker:
 def test_planning_config_exposes_entry_width_and_conservative_flags() -> None:
     cfg = PlanningConfig()
     assert hasattr(cfg, "max_entry_skills")
+    assert hasattr(cfg, "beam_width")
     assert hasattr(cfg, "conservative_reject")
     assert hasattr(cfg, "hard_fail_missing_inputs")
     assert cfg.conservative_reject is True
     assert cfg.hard_fail_missing_inputs is False
+
+
+def test_search_plans_uses_beam_width_to_keep_best_partial_states() -> None:
+    artifacts = _build_artifacts(
+        [
+            _weak_review_skill(),
+            _translate_report_skill(),
+            _summarize_translation_skill(),
+        ],
+        [
+            {
+                "type": "can_feed",
+                "source": "skill:translate_report",
+                "target": "skill:summarize_translation",
+                "confidence": 0.95,
+                "method": "test",
+                "evidence": {
+                    "supporting_fields": {
+                        "source_outputs": ["translated_text"],
+                        "target_inputs": ["translated_text"],
+                    }
+                },
+            }
+        ],
+    )
+    edges = artifacts.graph["edges"]
+    grounded = GroundedQuery(
+        query="translate and summarize the report",
+        query_terms={"translate", "summarize", "report"},
+        available_artifacts=[ArtifactRef(name="report_image", type="image")],
+        goal_terms={"translate", "summarize", "translated", "summary", "report"},
+    )
+
+    plans = search_plans(
+        artifacts=artifacts,
+        skill_by_id=artifacts.skill_by_id,
+        can_feed_edges=edges,
+        outgoing_edges=build_outgoing_edges(edges),
+        grounded=grounded,
+        max_depth=2,
+        max_plans=5,
+        max_branch=4,
+        max_entry_skills=3,
+        beam_width=1,
+    )
+
+    assert plans
+    assert {
+        plan.steps[0].skill_id
+        for plan in plans
+        if plan.steps
+    } == {"translate_report"}
+
+
+def test_beam_selection_treats_missing_inputs_as_penalty_not_primary_sort() -> None:
+    artifacts = _build_artifacts(
+        [
+            _weak_review_skill(),
+            _deep_security_audit_skill(),
+        ],
+        [],
+    )
+    grounded = GroundedQuery(
+        query="deep security audit report",
+        query_terms={"deep", "security", "audit", "report"},
+        available_artifacts=[],
+        goal_terms={"deep", "security", "audit", "risk", "report", "evidence"},
+    )
+
+    selected = select_beam_states(
+        [
+            SearchState(
+                skill_ids=("weak_review",),
+                available=frozenset(),
+                edges=(),
+            ),
+            SearchState(
+                skill_ids=("deep_security_audit",),
+                available=frozenset(),
+                edges=(),
+            ),
+        ],
+        grounded=grounded,
+        skill_by_id=artifacts.skill_by_id,
+        can_feed_edges=[],
+        beam_width=1,
+    )
+
+    assert [state.skill_ids for state in selected] == [("deep_security_audit",)]
+
+
+def test_search_plans_drops_paths_with_no_goal_relevance() -> None:
+    artifacts = _build_artifacts(
+        [
+            _generic_preprocess_skill(),
+            _irrelevant_archive_skill(),
+        ],
+        [
+            {
+                "type": "can_feed",
+                "source": "skill:generic_preprocess",
+                "target": "skill:irrelevant_archive",
+                "confidence": 0.95,
+                "method": "test",
+                "evidence": {
+                    "supporting_fields": {
+                        "source_outputs": ["normalized_text"],
+                        "target_inputs": ["normalized_text"],
+                    }
+                },
+            }
+        ],
+    )
+    edges = artifacts.graph["edges"]
+    grounded = GroundedQuery(
+        query="security audit",
+        query_terms={"security", "audit"},
+        available_artifacts=[ArtifactRef(name="goal", type="text", source="implicit_query")],
+        goal_terms={"security", "audit", "risk"},
+    )
+
+    plans = search_plans(
+        artifacts=artifacts,
+        skill_by_id=artifacts.skill_by_id,
+        can_feed_edges=edges,
+        outgoing_edges=build_outgoing_edges(edges),
+        grounded=grounded,
+        max_depth=3,
+        max_plans=5,
+        max_branch=4,
+        max_entry_skills=5,
+        beam_width=5,
+    )
+
+    assert plans == []
+
+
+def test_search_plans_keeps_bridge_path_to_goal_relevant_skill() -> None:
+    artifacts = _build_artifacts(
+        [
+            _generic_preprocess_skill(),
+            _audit_from_normalized_text_skill(),
+        ],
+        [
+            {
+                "type": "can_feed",
+                "source": "skill:generic_preprocess",
+                "target": "skill:audit_from_normalized_text",
+                "confidence": 0.95,
+                "method": "test",
+                "evidence": {
+                    "supporting_fields": {
+                        "source_outputs": ["normalized_text"],
+                        "target_inputs": ["normalized_text"],
+                    }
+                },
+            }
+        ],
+    )
+    edges = artifacts.graph["edges"]
+    grounded = GroundedQuery(
+        query="security audit",
+        query_terms={"security", "audit"},
+        available_artifacts=[ArtifactRef(name="goal", type="text", source="implicit_query")],
+        goal_terms={"security", "audit", "risk", "evidence"},
+    )
+
+    plans = search_plans(
+        artifacts=artifacts,
+        skill_by_id=artifacts.skill_by_id,
+        can_feed_edges=edges,
+        outgoing_edges=build_outgoing_edges(edges),
+        grounded=grounded,
+        max_depth=3,
+        max_plans=5,
+        max_branch=4,
+        max_entry_skills=5,
+        beam_width=5,
+    )
+
+    assert any(
+        [step.skill_id for step in plan.steps]
+        == ["generic_preprocess", "audit_from_normalized_text"]
+        for plan in plans
+    )
 
 
 def test_orchestrator_uses_user_artifacts_as_entry(tmp_path: Path) -> None:
@@ -378,7 +571,7 @@ def test_augment_with_structural_incomplete_plans_prefers_complex_query() -> Non
     output = _augment_with_structural_incomplete_plans(
         validated,
         candidates,
-        query="杩欐槸鎴戜滑鐨?PRD銆丄PI 鑽夋鍜?UI 鍘熷瀷銆傝璇勪及椋庨櫓骞剁粰涓婄嚎寤鸿",
+        query="PRD API UI risk security test design launch recommendation",
         grounded_query={"goal_terms": ["review", "audit"]},
         top_k=3,
     )
@@ -514,11 +707,8 @@ def _make_api_skill() -> SkillRepresentation:
         name="Make API",
         description="Generate API specification from a goal.",
         version="1.0.0",
-        tasks=["generate", "design"],
         inputs=[ParameterSpec(name="goal", type="text")],
         outputs=[ArtifactSpec(name="api_spec", type="yaml")],
-        preconditions=[],
-        postconditions=[],
     )
 
 
@@ -528,11 +718,8 @@ def _review_api_skill() -> SkillRepresentation:
         name="Review API",
         description="Review API specification for security issues.",
         version="1.0.0",
-        tasks=["review", "audit"],
         inputs=[ParameterSpec(name="api_spec", type="yaml")],
         outputs=[ArtifactSpec(name="review_report", type="markdown")],
-        preconditions=[],
-        postconditions=[],
     )
 
 
@@ -542,11 +729,8 @@ def _deploy_api_skill() -> SkillRepresentation:
         name="Deploy API",
         description="Prepare API deployment pipeline.",
         version="1.0.0",
-        tasks=["deploy", "validate"],
         inputs=[ParameterSpec(name="api_spec", type="yaml")],
         outputs=[ArtifactSpec(name="deployment_plan", type="markdown")],
-        preconditions=[],
-        postconditions=[],
     )
 
 
@@ -593,6 +777,108 @@ def _email_skill() -> SkillRepresentation:
             ParameterSpec(name="body", type="text", required=False),
         ],
         outputs=[ArtifactSpec(name="confirmation", type="text")],
+    )
+
+
+def _weak_review_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="weak_review",
+        name="Weak Review",
+        description="Light review for reports.",
+        version="1.0.0",
+        inputs=[],
+        outputs=[ArtifactSpec(name="notes", type="text")],
+    )
+
+
+def _translate_report_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="translate_report",
+        name="Translate Report",
+        description="Translate report images into translated text.",
+        version="1.0.0",
+        inputs=[ParameterSpec(name="report_image", type="image")],
+        outputs=[ArtifactSpec(name="translated_text", type="text")],
+    )
+
+
+def _summarize_translation_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="summarize_translation",
+        name="Summarize Translation",
+        description="Summarize translated report text.",
+        version="1.0.0",
+        inputs=[ParameterSpec(name="translated_text", type="text")],
+        outputs=[ArtifactSpec(name="summary", type="markdown")],
+    )
+
+
+def _deep_security_audit_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="deep_security_audit",
+        name="Deep Security Audit",
+        description="Deep security audit with risk evidence report.",
+        version="1.0.0",
+        inputs=[ParameterSpec(name="api_spec", type="yaml")],
+        outputs=[ArtifactSpec(name="risk_evidence_report", type="markdown")],
+    )
+
+
+def _generic_preprocess_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="generic_preprocess",
+        name="Generic Preprocess",
+        description="Normalize source text for later processing.",
+        version="1.0.0",
+        inputs=[ParameterSpec(name="goal", type="text")],
+        outputs=[ArtifactSpec(name="normalized_text", type="text")],
+    )
+
+
+def _irrelevant_archive_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="irrelevant_archive",
+        name="Archive Writer",
+        description="Write normalized material to an archive record.",
+        version="1.0.0",
+        inputs=[ParameterSpec(name="normalized_text", type="text")],
+        outputs=[ArtifactSpec(name="archive_record", type="json")],
+    )
+
+
+def _audit_from_normalized_text_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="audit_from_normalized_text",
+        name="Audit From Normalized Text",
+        description="Run security audit and produce risk evidence.",
+        version="1.0.0",
+        inputs=[ParameterSpec(name="normalized_text", type="text")],
+        outputs=[ArtifactSpec(name="risk_evidence", type="markdown")],
+    )
+
+
+def _build_artifacts(
+    skills: list[SkillRepresentation],
+    edges: list[dict],
+) -> BuildArtifacts:
+    normalized = [skill.to_dict() for skill in skills]
+    return _load_build_artifacts_from_payload(
+        skills=normalized,
+        edges=edges,
+    )
+
+
+def _load_build_artifacts_from_payload(
+    *,
+    skills: list[dict],
+    edges: list[dict],
+) -> BuildArtifacts:
+    return BuildArtifacts(
+        build_dir=Path("."),
+        manifest={},
+        skills=skills,
+        graph={"edges": edges},
+        index={"by_output": {}, "by_text_term": {}},
     )
 
 

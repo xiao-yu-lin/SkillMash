@@ -27,7 +27,7 @@ user query
   -> LLM grounding against offline artifact/task/output vocabulary
   -> validate grounded artifacts against known normalized names and types
   -> find entry Skills that consume grounded artifacts or match goal terms
-  -> run forward search over can_feed graph
+  -> run beam search over can_feed graph
   -> compose shared-upstream paths into DAG candidate plans
   -> LLM rank Top-M candidates into Top-K recommendations
   -> deterministic fallback when LLM ranking fails or returns insufficient results
@@ -70,23 +70,33 @@ The LLM output is then validated:
 Token matching should use the same shared normalization in both offline index
 build and online retrieval to avoid vocabulary drift between stages.
 
-## 4. Forward Search
+## 4. Beam Search
 
 The planner builds entry nodes from Skills that either:
 
 - consume the grounded user artifacts, or
 - match grounded goal terms.
 
-From each entry node it performs bounded BFS over `can_feed` edges:
+From those entry nodes it performs bounded beam search over `can_feed` edges:
 
 - `min_edge_confidence` defaults to `0.7`.
 - `max_depth` limits Skill steps per plan.
 - `max_branch` limits expansion fanout at each state.
+- `beam_width` limits the number of partial plans retained at each depth.
 - `max_plans` limits returned candidate plans.
 
 Each state carries selected Skill IDs, available artifact `(name, type)` pairs,
 and `can_feed` edges used so far. When a Skill is added, its outputs are added to
 the available artifact set.
+
+Beam selection scores partial plans by goal coverage and edge confidence, with
+missing required inputs applied as a penalty rather than a primary sort key. Path
+length and deterministic Skill ID order are used as tie-breakers. This keeps the
+online search budget focused on relevant paths without letting one missing input
+hide a much stronger candidate from downstream hard validation and reranking.
+Partial paths with no current goal contribution are expanded only when the
+remaining `can_feed` graph can still reach a goal-relevant Skill within the
+remaining depth budget.
 
 
 Linear paths that share an upstream producer are composed into DAG plans. For

@@ -75,6 +75,12 @@ def main() -> None:
         help="Maximum expansion branch count per search state.",
     )
     parser.add_argument(
+        "--beam_width",
+        type=int,
+        default=40,
+        help="Maximum partial plans retained at each search depth.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Print the full JSON planning result instead of a concise summary.",
@@ -106,6 +112,7 @@ def main() -> None:
         max_depth=args.max_depth,
         max_plans=args.max_plans,
         max_branch=args.max_branch,
+        beam_width=args.beam_width,
         top_m=args.top_m,
         top_k=args.top_k,
         include_candidates=args.show_candidates,

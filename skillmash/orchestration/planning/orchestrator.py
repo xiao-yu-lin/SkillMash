@@ -52,6 +52,7 @@ class SkillOrchestrator:
         max_plans: int | None = None,
         max_branch: int | None = None,
         max_entry_skills: int | None = None,
+        beam_width: int | None = None,
         top_m: int | None = None,
         top_k: int | None = None,
         include_candidates: bool | None = None,
@@ -68,6 +69,7 @@ class SkillOrchestrator:
             max_plans=max_plans,
             max_branch=max_branch,
             max_entry_skills=max_entry_skills,
+            beam_width=beam_width,
             top_m=top_m,
             top_k=top_k,
             include_candidates=include_candidates,
@@ -80,6 +82,7 @@ class SkillOrchestrator:
         self.max_plans = max(1, self.config.max_plans)
         self.max_branch = max(1, self.config.max_branch)
         self.max_entry_skills = max(1, self.config.max_entry_skills)
+        self.beam_width = max(1, self.config.beam_width)
         self.skill_by_id = artifacts.skill_by_id
         self.llm_config = llm_config
         if llm_client is not None:
@@ -119,6 +122,7 @@ class SkillOrchestrator:
             max_entry_skills=planning_config.max_entry_skills
             if planning_config
             else None,
+            beam_width=planning_config.beam_width if planning_config else None,
             top_m=planning_config.top_m if planning_config else None,
             top_k=planning_config.top_k if planning_config else None,
             include_candidates=planning_config.include_candidates
@@ -155,6 +159,7 @@ class SkillOrchestrator:
             max_plans=max(1, config.max_plans),
             max_branch=max(1, config.max_branch),
             max_entry_skills=max(1, config.max_entry_skills),
+            beam_width=max(1, config.beam_width),
         )
         candidate_plans = sorted(
             (plan.to_dict() for plan in plans),
@@ -229,6 +234,7 @@ class SkillOrchestrator:
             ranking_pool,
             key=lambda plan: (
                 -strategy.rank_score(plan, context),
+                -int(plan.get("consumed_user_artifacts") or 0),
                 len(plan.get("steps") or []),
                 -float(plan.get("goal_score") or 0.0),
             ),
@@ -280,6 +286,7 @@ def _resolve_config(
     max_plans: int | None,
     max_branch: int | None,
     max_entry_skills: int | None,
+    beam_width: int | None,
     top_m: int | None,
     top_k: int | None,
     include_candidates: bool | None,
@@ -301,6 +308,7 @@ def _resolve_config(
         max_entry_skills=int(max_entry_skills)
         if max_entry_skills is not None
         else base_config.max_entry_skills,
+        beam_width=int(beam_width) if beam_width is not None else base_config.beam_width,
         top_m=int(top_m) if top_m is not None else base_config.top_m,
         top_k=int(top_k) if top_k is not None else base_config.top_k,
         include_candidates=(
@@ -335,6 +343,7 @@ def _planning_defaults_from_manifest(manifest: dict[str, Any]) -> PlanningConfig
         max_entry_skills=int(
             defaults.get("max_entry_skills", PlanningConfig.max_entry_skills)
         ),
+        beam_width=int(defaults.get("beam_width", PlanningConfig.beam_width)),
         top_m=int(defaults.get("top_m", PlanningConfig.top_m)),
         top_k=int(defaults.get("top_k", PlanningConfig.top_k)),
         include_candidates=bool(

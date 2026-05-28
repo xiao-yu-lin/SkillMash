@@ -155,6 +155,7 @@ class PlanningConfig:
     max_plans: int = 20
     max_branch: int = 8
     max_entry_skills: int = 40
+    beam_width: int = 40
     top_m: int = 12
     top_k: int = 3
     include_candidates: bool = True

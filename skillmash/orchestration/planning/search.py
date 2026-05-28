@@ -16,6 +16,8 @@ from skillmash.orchestration.planning.models import (
 )
 from skillmash.orchestration.planning.utils import skill_id, tokenize
 
+BEAM_MISSING_INPUT_PENALTY = 2.0
+
 
 def search_plans(
     *,
@@ -28,6 +30,7 @@ def search_plans(
     max_plans: int,
     max_branch: int,
     max_entry_skills: int,
+    beam_width: int,
 ) -> list[OrchestrationPlan]:
     initial_available = frozenset(artifact.key for artifact in grounded.available_artifacts)
     entry_ids = entry_skill_ids(
@@ -37,71 +40,189 @@ def search_plans(
         goal_terms=grounded.goal_terms,
         max_entry_skills=max_entry_skills,
     )
-    queue = deque(
+    initial_states = [
         SearchState(skill_ids=(skill_id_,), available=initial_available, edges=())
         for skill_id_ in entry_ids
+    ]
+    frontier = select_beam_states(
+        initial_states,
+        grounded=grounded,
+        skill_by_id=skill_by_id,
+        can_feed_edges=can_feed_edges,
+        beam_width=beam_width,
     )
     plans: list[OrchestrationPlan] = []
     seen: set[tuple[tuple[str, ...], frozenset[tuple[str, str]]]] = set()
 
-    while queue and len(plans) < max_plans * 4:
-        state = queue.popleft()
-        key = (state.skill_ids, state.available)
-        if key in seen:
-            continue
-        seen.add(key)
+    while frontier and len(plans) < max_plans * 4:
+        next_frontier: list[SearchState] = []
+        for state in frontier:
+            key = (state.skill_ids, state.available)
+            if key in seen:
+                continue
+            seen.add(key)
 
-        plan = state_to_plan(
-            state=state,
+            plan = state_to_plan(
+                state=state,
+                grounded=grounded,
+                skill_by_id=skill_by_id,
+                can_feed_edges=can_feed_edges,
+            )
+            remaining_depth = max_depth - len(state.skill_ids)
+            if plan.goal_score <= 0 and not can_reach_goal_relevant_skill(
+                last_id=state.skill_ids[-1],
+                outgoing_edges=outgoing_edges,
+                can_feed_edges=can_feed_edges,
+                skill_by_id=skill_by_id,
+                goal_terms=grounded.goal_terms,
+                max_hops=remaining_depth,
+            ):
+                continue
+            if plan.goal_score > 0:
+                plans.append(plan)
+            if len(state.skill_ids) >= max_depth:
+                continue
+
+            last_id = state.skill_ids[-1]
+            next_ids = next_skill_ids(
+                last_id=last_id,
+                state=state,
+                inferred_inputs=grounded.inferred_inputs,
+                goal_terms=grounded.goal_terms,
+                outgoing_edges=outgoing_edges,
+                can_feed_edges=can_feed_edges,
+                skill_by_id=skill_by_id,
+            )
+            for edge_index, next_id in next_ids[:max_branch]:
+                if next_id in state.skill_ids:
+                    continue
+                next_skill = skill_by_id.get(next_id)
+                last_skill = skill_by_id.get(last_id)
+                if not next_skill or not last_skill:
+                    continue
+                next_frontier.append(
+                    SearchState(
+                        skill_ids=(*state.skill_ids, next_id),
+                        available=(
+                            state.available
+                            | output_keys(last_skill)
+                            | output_keys(next_skill)
+                        ),
+                        edges=(*state.edges, edge_index),
+                    )
+                )
+        frontier = select_beam_states(
+            next_frontier,
             grounded=grounded,
             skill_by_id=skill_by_id,
             can_feed_edges=can_feed_edges,
+            beam_width=beam_width,
         )
-        if plan.goal_score > 0:
-            plans.append(plan)
-        if len(state.skill_ids) >= max_depth:
-            continue
-
-        last_id = state.skill_ids[-1]
-        next_ids = next_skill_ids(
-            last_id=last_id,
-            state=state,
-            inferred_inputs=grounded.inferred_inputs,
-            goal_terms=grounded.goal_terms,
-            outgoing_edges=outgoing_edges,
-            can_feed_edges=can_feed_edges,
-            skill_by_id=skill_by_id,
-        )
-        for edge_index, next_id in next_ids[:max_branch]:
-            if next_id in state.skill_ids:
-                continue
-            next_skill = skill_by_id.get(next_id)
-            last_skill = skill_by_id.get(last_id)
-            if not next_skill or not last_skill:
-                continue
-            queue.append(
-                SearchState(
-                    skill_ids=(*state.skill_ids, next_id),
-                    available=(
-                        state.available
-                        | output_keys(last_skill)
-                        | output_keys(next_skill)
-                    ),
-                    edges=(*state.edges, edge_index),
-                )
-            )
 
     if not plans:
-        return [
-            state_to_plan(
+        fallback_plans = []
+        for skill_id_ in entry_ids[:max_plans]:
+            plan = state_to_plan(
                 state=SearchState(skill_ids=(skill_id_,), available=initial_available, edges=()),
                 grounded=grounded,
                 skill_by_id=skill_by_id,
                 can_feed_edges=can_feed_edges,
             )
-            for skill_id_ in entry_ids[:max_plans]
-        ]
+            if plan.goal_score > 0:
+                fallback_plans.append(plan)
+        return fallback_plans
     return compose_dag_plans(dedupe_plans(plans), max_plans=max_plans)
+
+
+def can_reach_goal_relevant_skill(
+    *,
+    last_id: str,
+    outgoing_edges: dict[str, list[int]],
+    can_feed_edges: list[dict[str, Any]],
+    skill_by_id: dict[str, dict[str, Any]],
+    goal_terms: set[str],
+    max_hops: int,
+) -> bool:
+    if max_hops <= 0:
+        return False
+    queue = deque([(last_id, 0)])
+    seen = {last_id}
+    while queue:
+        current_id, depth = queue.popleft()
+        if depth >= max_hops:
+            continue
+        for edge_index in outgoing_edges.get(current_id, []):
+            edge = can_feed_edges[edge_index]
+            target_id = skill_id(edge.get("target"))
+            if target_id in seen:
+                continue
+            seen.add(target_id)
+            target = skill_by_id.get(target_id)
+            if not target:
+                continue
+            if skill_goal_score(target, goal_terms) > 0:
+                return True
+            queue.append((target_id, depth + 1))
+    return False
+
+
+def select_beam_states(
+    states: list[SearchState],
+    *,
+    grounded: GroundedQuery,
+    skill_by_id: dict[str, dict[str, Any]],
+    can_feed_edges: list[dict[str, Any]],
+    beam_width: int,
+) -> list[SearchState]:
+    unique: dict[tuple[tuple[str, ...], frozenset[tuple[str, str]]], SearchState] = {}
+    for state in states:
+        unique.setdefault((state.skill_ids, state.available), state)
+    return [
+        state
+        for _, state in sorted(
+            (
+                (
+                    beam_state_sort_key(
+                        state,
+                        grounded=grounded,
+                        skill_by_id=skill_by_id,
+                        can_feed_edges=can_feed_edges,
+                    ),
+                    state,
+                )
+                for state in unique.values()
+            ),
+            key=lambda item: item[0],
+        )[: max(1, beam_width)]
+    ]
+
+
+def beam_state_sort_key(
+    state: SearchState,
+    *,
+    grounded: GroundedQuery,
+    skill_by_id: dict[str, dict[str, Any]],
+    can_feed_edges: list[dict[str, Any]],
+) -> tuple[float, int, float, int, tuple[str, ...]]:
+    plan = state_to_plan(
+        state=state,
+        grounded=grounded,
+        skill_by_id=skill_by_id,
+        can_feed_edges=can_feed_edges,
+    )
+    missing_count = len(plan.missing_inputs)
+    beam_score = (
+        float(plan.goal_score)
+        + float(plan.edge_confidence)
+        - missing_count * BEAM_MISSING_INPUT_PENALTY
+    )
+    return (
+        -beam_score,
+        missing_count,
+        -float(plan.edge_confidence),
+        len(plan.steps),
+        state.skill_ids,
+    )
 
 
 def entry_skill_ids(

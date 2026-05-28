@@ -228,6 +228,7 @@ class BuildManifest:
             "top_k": 3,
             "include_candidates": True,
             "conservative_reject": True,
+            "enable_backward_search": True,
         }
     )
     llm: Dict[str, Any] = field(default_factory=dict)

@@ -16,7 +16,9 @@ from skillmash.orchestration.planning.orchestrator import (
     _annotate_plan_execution_feasibility,
 )
 from skillmash.orchestration.planning.search import (
+    build_incoming_edges,
     build_outgoing_edges,
+    search_backward_plans,
     search_plans,
     select_beam_states,
 )
@@ -72,6 +74,24 @@ class BranchingMatcher:
                 },
                 accepted=True,
             ),
+        ]
+
+
+class ContractMatcher:
+    def match(self, registry, candidates):
+        return [
+            LLMMatch(
+                source_id="normalize_contract",
+                target_id="audit_contract",
+                relation_type="can_feed",
+                confidence=0.95,
+                method="test_matcher",
+                supporting_fields={
+                    "source_outputs": ["contract"],
+                    "target_inputs": ["contract"],
+                },
+                accepted=True,
+            )
         ]
 
 
@@ -148,8 +168,10 @@ def test_planning_config_exposes_entry_width_and_conservative_flags() -> None:
     assert hasattr(cfg, "beam_width")
     assert hasattr(cfg, "conservative_reject")
     assert hasattr(cfg, "hard_fail_missing_inputs")
+    assert hasattr(cfg, "enable_backward_search")
     assert cfg.conservative_reject is True
     assert cfg.hard_fail_missing_inputs is False
+    assert cfg.enable_backward_search is True
 
 
 def test_search_plans_uses_beam_width_to_keep_best_partial_states() -> None:
@@ -337,6 +359,145 @@ def test_search_plans_keeps_bridge_path_to_goal_relevant_skill() -> None:
     )
 
 
+def test_backward_search_recovers_goal_path_from_target_skill() -> None:
+    artifacts = _build_artifacts(
+        [
+            _normalize_contract_skill(),
+            _audit_contract_skill(),
+        ],
+        [
+            {
+                "type": "can_feed",
+                "source": "skill:normalize_contract",
+                "target": "skill:audit_contract",
+                "confidence": 0.95,
+                "method": "test",
+                "evidence": {
+                    "supporting_fields": {
+                        "source_outputs": ["contract"],
+                        "target_inputs": ["contract"],
+                    }
+                },
+            }
+        ],
+    )
+    edges = artifacts.graph["edges"]
+    grounded = GroundedQuery(
+        query="security audit",
+        query_terms={"security", "audit"},
+        available_artifacts=[],
+        goal_terms={"security", "audit", "risk"},
+    )
+
+    forward = search_plans(
+        artifacts=artifacts,
+        skill_by_id=artifacts.skill_by_id,
+        can_feed_edges=edges,
+        outgoing_edges=build_outgoing_edges(edges),
+        grounded=grounded,
+        max_depth=3,
+        max_plans=5,
+        max_branch=4,
+        max_entry_skills=5,
+        beam_width=5,
+    )
+    backward = search_backward_plans(
+        artifacts=artifacts,
+        skill_by_id=artifacts.skill_by_id,
+        can_feed_edges=edges,
+        incoming_edges=build_incoming_edges(edges),
+        grounded=grounded,
+        max_depth=3,
+        max_plans=5,
+        max_branch=4,
+        beam_width=5,
+    )
+
+    assert not any(
+        [step.skill_id for step in plan.steps]
+        == ["normalize_contract", "audit_contract"]
+        for plan in forward
+    )
+    plan = next(
+        plan
+        for plan in backward
+        if [step.skill_id for step in plan.steps]
+        == ["normalize_contract", "audit_contract"]
+    )
+    assert plan.status == "needs_input"
+    assert {
+        (item["skill_id"], item["name"], item["type"])
+        for item in plan.missing_inputs
+    } == {("normalize_contract", "raw_source", "text")}
+
+
+def test_backward_search_only_expands_edges_that_fill_current_gap() -> None:
+    artifacts = _build_artifacts(
+        [
+            _normalize_contract_skill(),
+            _unrelated_source_skill(),
+            _audit_contract_skill(),
+        ],
+        [
+            {
+                "type": "can_feed",
+                "source": "skill:normalize_contract",
+                "target": "skill:audit_contract",
+                "confidence": 0.95,
+                "method": "test",
+                "evidence": {
+                    "supporting_fields": {
+                        "source_outputs": ["contract"],
+                        "target_inputs": ["contract"],
+                    }
+                },
+            },
+            {
+                "type": "can_feed",
+                "source": "skill:unrelated_source",
+                "target": "skill:audit_contract",
+                "confidence": 0.99,
+                "method": "test",
+                "evidence": {
+                    "supporting_fields": {
+                        "source_outputs": ["archive_record"],
+                        "target_inputs": ["archive_record"],
+                    }
+                },
+            },
+        ],
+    )
+    grounded = GroundedQuery(
+        query="security audit",
+        query_terms={"security", "audit"},
+        available_artifacts=[],
+        goal_terms={"security", "audit", "risk"},
+    )
+
+    plans = search_backward_plans(
+        artifacts=artifacts,
+        skill_by_id=artifacts.skill_by_id,
+        can_feed_edges=artifacts.graph["edges"],
+        incoming_edges=build_incoming_edges(artifacts.graph["edges"]),
+        grounded=grounded,
+        max_depth=3,
+        max_plans=5,
+        max_branch=4,
+        beam_width=5,
+    )
+
+    assert any(
+        [step.skill_id for step in plan.steps]
+        == ["normalize_contract", "audit_contract"]
+        for plan in plans
+    )
+    assert not any(
+        [step.skill_id for step in plan.steps]
+        == ["unrelated_source", "audit_contract"]
+        for plan in plans
+    )
+
+
 def test_orchestrator_uses_user_artifacts_as_entry(tmp_path: Path) -> None:
     result = GraphBuilder(matcher=ExactMatcher()).build(
         [_make_api_skill(), _review_api_skill()]
@@ -386,6 +547,61 @@ def test_orchestrator_traverses_can_feed_when_needed(tmp_path: Path) -> None:
     ]
     assert "make_api" in step_ids
     assert "review_api" in step_ids
+
+
+def test_orchestrator_merges_backward_candidates(tmp_path: Path) -> None:
+    result = GraphBuilder(matcher=ContractMatcher()).build(
+        [_normalize_contract_skill(), _audit_contract_skill()]
+    )
+    write_graph_build_result(result, tmp_path)
+
+    planner = SkillOrchestrator(
+        load_build_artifacts(tmp_path),
+        llm_client=FakeGroundingClient(
+            {
+                "available_artifacts": [],
+                "goal_terms": ["security", "audit", "risk"],
+            }
+        ),
+        ranker=FirstPlanRanker(),
+        max_depth=3,
+        max_plans=5,
+    )
+    response = planner.plan("security audit")
+
+    assert any(
+        [step["skill_id"] for step in candidate["steps"]]
+        == ["normalize_contract", "audit_contract"]
+        for candidate in response["plans"]
+    )
+
+
+def test_orchestrator_can_disable_backward_search(tmp_path: Path) -> None:
+    result = GraphBuilder(matcher=ContractMatcher()).build(
+        [_normalize_contract_skill(), _audit_contract_skill()]
+    )
+    write_graph_build_result(result, tmp_path)
+
+    planner = SkillOrchestrator(
+        load_build_artifacts(tmp_path),
+        llm_client=FakeGroundingClient(
+            {
+                "available_artifacts": [],
+                "goal_terms": ["security", "audit", "risk"],
+            }
+        ),
+        ranker=FirstPlanRanker(),
+        planning_config=PlanningConfig(enable_backward_search=False),
+        max_depth=3,
+        max_plans=5,
+    )
+    response = planner.plan("security audit")
+
+    assert not any(
+        [step["skill_id"] for step in candidate["steps"]]
+        == ["normalize_contract", "audit_contract"]
+        for candidate in response["plans"]
+    )
 
 
 def test_orchestrator_composes_shared_upstream_paths_into_dag(tmp_path: Path) -> None:
@@ -854,6 +1070,39 @@ def _audit_from_normalized_text_skill() -> SkillRepresentation:
         version="1.0.0",
         inputs=[ParameterSpec(name="normalized_text", type="text")],
         outputs=[ArtifactSpec(name="risk_evidence", type="markdown")],
+    )
+
+
+def _normalize_contract_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="normalize_contract",
+        name="Normalize Contract",
+        description="Normalize source material into a contract artifact.",
+        version="1.0.0",
+        inputs=[ParameterSpec(name="raw_source", type="text")],
+        outputs=[ArtifactSpec(name="contract", type="json")],
+    )
+
+
+def _unrelated_source_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="unrelated_source",
+        name="Unrelated Source",
+        description="Produce unrelated archival material.",
+        version="1.0.0",
+        inputs=[ParameterSpec(name="raw_source", type="text")],
+        outputs=[ArtifactSpec(name="archive_record", type="json")],
+    )
+
+
+def _audit_contract_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="audit_contract",
+        name="Security Audit",
+        description="Run a security audit and produce risk findings.",
+        version="1.0.0",
+        inputs=[ParameterSpec(name="contract", type="json")],
+        outputs=[ArtifactSpec(name="risk_findings", type="markdown")],
     )
 
 

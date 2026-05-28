@@ -9,7 +9,10 @@ from skillmash.orchestration.artifacts import BuildArtifacts
 from skillmash.orchestration.planning.grounding import ground_query
 from skillmash.orchestration.planning.models import GroundedQuery, GroundingClient, PlanningConfig
 from skillmash.orchestration.planning.search import (
+    build_incoming_edges,
     build_outgoing_edges,
+    dedupe_plans,
+    search_backward_plans,
     search_plans,
 )
 from skillmash.orchestration.planning.utils import clamp
@@ -58,6 +61,7 @@ class SkillOrchestrator:
         include_candidates: bool | None = None,
         conservative_reject: bool | None = None,
         hard_fail_missing_inputs: bool | None = None,
+        enable_backward_search: bool | None = None,
     ) -> None:
         self.artifacts = artifacts
         self.manifest_defaults = _planning_defaults_from_manifest(artifacts.manifest)
@@ -75,6 +79,7 @@ class SkillOrchestrator:
             include_candidates=include_candidates,
             conservative_reject=conservative_reject,
             hard_fail_missing_inputs=hard_fail_missing_inputs,
+            enable_backward_search=enable_backward_search,
         )
 
         self.min_edge_confidence = clamp(self.config.min_edge_confidence)
@@ -134,6 +139,9 @@ class SkillOrchestrator:
             hard_fail_missing_inputs=planning_config.hard_fail_missing_inputs
             if planning_config
             else None,
+            enable_backward_search=planning_config.enable_backward_search
+            if planning_config
+            else None,
         )
         grounded = self.ground_query(query)
         can_feed_edges = [
@@ -161,6 +169,23 @@ class SkillOrchestrator:
             max_entry_skills=max(1, config.max_entry_skills),
             beam_width=max(1, config.beam_width),
         )
+        if config.enable_backward_search:
+            plans = dedupe_plans(
+                [
+                    *plans,
+                    *search_backward_plans(
+                        artifacts=self.artifacts,
+                        skill_by_id=self.skill_by_id,
+                        can_feed_edges=can_feed_edges,
+                        incoming_edges=build_incoming_edges(can_feed_edges),
+                        grounded=grounded,
+                        max_depth=max(1, config.max_depth),
+                        max_plans=max(1, config.max_plans),
+                        max_branch=max(1, config.max_branch),
+                        beam_width=max(1, config.beam_width),
+                    ),
+                ]
+            )
         candidate_plans = sorted(
             (plan.to_dict() for plan in plans),
             key=lambda plan: (
@@ -292,6 +317,7 @@ def _resolve_config(
     include_candidates: bool | None,
     conservative_reject: bool | None,
     hard_fail_missing_inputs: bool | None,
+    enable_backward_search: bool | None,
 ) -> PlanningConfig:
     base_config = base or PlanningConfig()
     return PlanningConfig(
@@ -326,6 +352,11 @@ def _resolve_config(
             if hard_fail_missing_inputs is not None
             else base_config.hard_fail_missing_inputs
         ),
+        enable_backward_search=(
+            bool(enable_backward_search)
+            if enable_backward_search is not None
+            else base_config.enable_backward_search
+        ),
     )
 
 
@@ -356,6 +387,12 @@ def _planning_defaults_from_manifest(manifest: dict[str, Any]) -> PlanningConfig
             defaults.get(
                 "hard_fail_missing_inputs",
                 PlanningConfig.hard_fail_missing_inputs,
+            )
+        ),
+        enable_backward_search=bool(
+            defaults.get(
+                "enable_backward_search",
+                PlanningConfig.enable_backward_search,
             )
         ),
     )

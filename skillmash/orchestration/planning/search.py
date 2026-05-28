@@ -134,6 +134,102 @@ def search_plans(
     return compose_dag_plans(dedupe_plans(plans), max_plans=max_plans)
 
 
+def search_backward_plans(
+    *,
+    artifacts: BuildArtifacts,
+    skill_by_id: dict[str, dict[str, Any]],
+    can_feed_edges: list[dict[str, Any]],
+    incoming_edges: dict[str, list[int]],
+    grounded: GroundedQuery,
+    max_depth: int,
+    max_plans: int,
+    max_branch: int,
+    beam_width: int,
+) -> list[OrchestrationPlan]:
+    initial_available = frozenset(artifact.key for artifact in grounded.available_artifacts)
+    goal_ids = goal_skill_ids(
+        artifacts=artifacts,
+        goal_terms=grounded.goal_terms,
+        max_goal_skills=max(max_plans * 2, beam_width),
+    )
+    frontier = select_beam_states(
+        [
+            SearchState(skill_ids=(skill_id_,), available=initial_available, edges=())
+            for skill_id_ in goal_ids
+        ],
+        grounded=grounded,
+        skill_by_id=skill_by_id,
+        can_feed_edges=can_feed_edges,
+        beam_width=beam_width,
+    )
+    plans: list[OrchestrationPlan] = []
+    seen: set[tuple[tuple[str, ...], frozenset[tuple[str, str]]]] = set()
+
+    while frontier and len(plans) < max_plans * 4:
+        next_frontier: list[SearchState] = []
+        for state in frontier:
+            key = (state.skill_ids, state.available)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            plan = state_to_plan(
+                state=state,
+                grounded=grounded,
+                skill_by_id=skill_by_id,
+                can_feed_edges=can_feed_edges,
+            )
+            if plan.goal_score > 0:
+                plans.append(plan)
+            if len(state.skill_ids) >= max_depth:
+                continue
+
+            root_id = state.skill_ids[0]
+            root = skill_by_id.get(root_id)
+            if not root:
+                continue
+            root_missing = missing_inputs(
+                root,
+                state.available,
+                inferred_inputs=grounded.inferred_inputs,
+            )
+            if not root_missing:
+                continue
+
+            previous_ids = previous_skill_ids(
+                root_id=root_id,
+                root_missing=root_missing,
+                state=state,
+                incoming_edges=incoming_edges,
+                can_feed_edges=can_feed_edges,
+                skill_by_id=skill_by_id,
+                available=state.available,
+                inferred_inputs=grounded.inferred_inputs,
+                goal_terms=grounded.goal_terms,
+            )
+            for edge_index, previous_id in previous_ids[:max_branch]:
+                if previous_id in state.skill_ids:
+                    continue
+                if previous_id not in skill_by_id:
+                    continue
+                next_frontier.append(
+                    SearchState(
+                        skill_ids=(previous_id, *state.skill_ids),
+                        available=state.available,
+                        edges=(edge_index, *state.edges),
+                    )
+                )
+        frontier = select_beam_states(
+            next_frontier,
+            grounded=grounded,
+            skill_by_id=skill_by_id,
+            can_feed_edges=can_feed_edges,
+            beam_width=beam_width,
+        )
+
+    return dedupe_plans(plans)[: max_plans * 2]
+
+
 def can_reach_goal_relevant_skill(
     *,
     last_id: str,
@@ -253,6 +349,27 @@ def entry_skill_ids(
     ][:max_entry_skills]
 
 
+def goal_skill_ids(
+    *,
+    artifacts: BuildArtifacts,
+    goal_terms: set[str],
+    max_goal_skills: int,
+) -> list[str]:
+    scored = []
+    for skill in artifacts.skills:
+        current_skill_id = str(skill.get("id") or "")
+        if not current_skill_id:
+            continue
+        score = skill_goal_score(skill, goal_terms)
+        if score <= 0:
+            continue
+        scored.append((score, current_skill_id))
+    return [
+        current_skill_id
+        for _, current_skill_id in sorted(scored, key=lambda item: (-item[0], item[1]))
+    ][:max_goal_skills]
+
+
 def next_skill_ids(
     *,
     last_id: str,
@@ -286,6 +403,57 @@ def next_skill_ids(
     return [
         (edge_index, target_id)
         for _, edge_index, target_id in sorted(candidates, key=lambda item: (-item[0], item[2]))
+    ]
+
+
+def previous_skill_ids(
+    *,
+    root_id: str,
+    root_missing: list[dict[str, Any]],
+    state: SearchState,
+    incoming_edges: dict[str, list[int]],
+    can_feed_edges: list[dict[str, Any]],
+    skill_by_id: dict[str, dict[str, Any]],
+    available: Iterable[tuple[str, str]],
+    inferred_inputs: list[InferredInput],
+    goal_terms: set[str],
+) -> list[tuple[int, str]]:
+    candidates: list[tuple[float, int, str]] = []
+    missing_keys = {
+        (str(item.get("name") or ""), str(item.get("type") or "unknown"))
+        for item in root_missing
+        if item.get("name")
+    }
+    for edge_index in incoming_edges.get(root_id, []):
+        edge = can_feed_edges[edge_index]
+        source_id = skill_id(edge.get("source"))
+        if source_id in state.skill_ids:
+            continue
+        source = skill_by_id.get(source_id)
+        target = skill_by_id.get(root_id)
+        if not source or not target:
+            continue
+        if not edge_feeds_missing_inputs(
+            edge=edge,
+            source=source,
+            target=target,
+            missing_keys=missing_keys,
+        ):
+            continue
+        score = (
+            float(edge.get("confidence") or 0.0) * 4.0
+            + input_coverage_score(
+                source,
+                available,
+                inferred_inputs=inferred_inputs,
+            )
+            * 2.0
+            + skill_goal_score(source, goal_terms)
+        )
+        candidates.append((score, edge_index, source_id))
+    return [
+        (edge_index, source_id)
+        for _, edge_index, source_id in sorted(candidates, key=lambda item: (-item[0], item[2]))
     ]
 
 
@@ -371,6 +539,13 @@ def build_outgoing_edges(edges: list[dict[str, Any]]) -> dict[str, list[int]]:
     for index, edge in enumerate(edges):
         outgoing[skill_id(edge.get("source"))].append(index)
     return outgoing
+
+
+def build_incoming_edges(edges: list[dict[str, Any]]) -> dict[str, list[int]]:
+    incoming: dict[str, list[int]] = defaultdict(list)
+    for index, edge in enumerate(edges):
+        incoming[skill_id(edge.get("target"))].append(index)
+    return incoming
 
 
 def input_coverage_score(
@@ -489,6 +664,44 @@ def artifact_matches(
     return any(
         candidate_name == name and (candidate_type == "unknown" or type_ == "unknown")
         for candidate_name, candidate_type in available
+    )
+
+
+def edge_feeds_missing_inputs(
+    *,
+    edge: dict[str, Any],
+    source: dict[str, Any],
+    target: dict[str, Any],
+    missing_keys: set[tuple[str, str]],
+) -> bool:
+    if not missing_keys:
+        return False
+    evidence = edge.get("evidence") or {}
+    supporting_fields = evidence.get("supporting_fields") or {}
+    target_input_names = {
+        str(item)
+        for item in supporting_fields.get("target_inputs", [])
+        if str(item).strip()
+    }
+    target_input_names.update(
+        str(mapping.get("target_input"))
+        for mapping in supporting_fields.get("port_mappings", [])
+        if isinstance(mapping, dict) and mapping.get("target_input")
+    )
+    missing_names = {name for name, _ in missing_keys}
+    if target_input_names & missing_names:
+        return True
+
+    source_outputs = output_keys(source)
+    target_inputs = {
+        (str(item.get("name")), str(item.get("type") or "unknown"))
+        for item in target.get("inputs", [])
+        if item.get("name")
+    }
+    return any(
+        missing_key in target_inputs
+        and artifact_matches(missing_key, set(source_outputs))
+        for missing_key in missing_keys
     )
 
 

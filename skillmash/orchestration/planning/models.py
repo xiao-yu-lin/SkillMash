@@ -161,6 +161,7 @@ class PlanningConfig:
     include_candidates: bool = True
     conservative_reject: bool = True
     hard_fail_missing_inputs: bool = False
+    enable_backward_search: bool = True
 
 
 @dataclass(frozen=True)

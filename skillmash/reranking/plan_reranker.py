@@ -339,6 +339,7 @@ def _ensure_multi_step_coverage(
         for idx in sorted_indexes
         if idx not in selected_indexes
         and len(plans[idx - 1].get("steps") or []) >= 2
+        and float(plans[idx - 1].get("goal_score") or 0.0) > 0
     ]
     if not candidate_multi_indexes:
         return recommended[:top_k]
@@ -376,6 +377,7 @@ def _deterministic_plan_indexes(
         goal_score = float(plan.get("goal_score") or 0.0)
         edge_confidence = float(plan.get("edge_confidence") or 0.0)
         consumed_user_artifacts = int(plan.get("consumed_user_artifacts") or 0)
+        relevance_rank = 0 if goal_score > 0 else 1
         multi_step_penalty = 1 if prefer_multi_step and step_count < 2 else 0
         status_rank = 1 if plan.get("status") != "ready" else 0
         if (
@@ -388,10 +390,11 @@ def _deterministic_plan_indexes(
 
         if prefer_multi_step:
             sort_key = (
+                relevance_rank,
+                -goal_score,
                 status_rank,
                 multi_step_penalty,
                 missing_count,
-                -goal_score,
                 -edge_confidence,
                 -consumed_user_artifacts,
                 step_count,
@@ -399,9 +402,10 @@ def _deterministic_plan_indexes(
             )
         else:
             sort_key = (
+                relevance_rank,
+                -goal_score,
                 status_rank,
                 missing_count,
-                -goal_score,
                 -edge_confidence,
                 -consumed_user_artifacts,
                 step_count,

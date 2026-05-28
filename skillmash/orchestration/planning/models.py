@@ -23,6 +23,30 @@ class ArtifactRef:
 
 
 @dataclass(frozen=True)
+class InferredInput:
+    """A skill input value inferred from the user request."""
+
+    skill_id: str
+    name: str
+    type: str = "unknown"
+    value: Any = None
+    source: str = "llm_grounding"
+
+    @property
+    def key(self) -> tuple[str, str, str]:
+        return (self.skill_id, self.name, self.type)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "skill_id": self.skill_id,
+            "name": self.name,
+            "type": self.type,
+            "value": self.value,
+            "source": self.source,
+        }
+
+
+@dataclass(frozen=True)
 class GroundedQuery:
     """User query grounded into known artifacts and goal terms."""
 
@@ -30,6 +54,7 @@ class GroundedQuery:
     query_terms: set[str]
     available_artifacts: list[ArtifactRef]
     goal_terms: set[str]
+    inferred_inputs: list[InferredInput] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -37,6 +62,9 @@ class GroundedQuery:
             "query_terms": sorted(self.query_terms),
             "available_artifacts": [
                 artifact.to_dict() for artifact in self.available_artifacts
+            ],
+            "inferred_inputs": [
+                inferred_input.to_dict() for inferred_input in self.inferred_inputs
             ],
             "goal_terms": sorted(self.goal_terms),
         }
@@ -51,6 +79,7 @@ class PlanStep:
     inputs: list[dict[str, Any]]
     outputs: list[dict[str, Any]]
     missing_inputs: list[dict[str, Any]] = field(default_factory=list)
+    filled_inputs: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -59,6 +88,7 @@ class PlanStep:
             "inputs": self.inputs,
             "outputs": self.outputs,
             "missing_inputs": self.missing_inputs,
+            "filled_inputs": self.filled_inputs,
         }
 
 

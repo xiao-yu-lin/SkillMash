@@ -81,6 +81,60 @@ class EmptyMatcher:
         return []
 
 
+class PortFlowMatcher:
+    def match(self, registry, candidates):
+        return [
+            LLMMatch(
+                source_id="xiaoyi-image-translation",
+                target_id="general-writing",
+                relation_type="can_feed",
+                confidence=0.92,
+                method="test_matcher",
+                supporting_fields={
+                    "port_mappings": [
+                        {
+                            "source_output": "translated_text",
+                            "target_input": "query",
+                        }
+                    ],
+                    "source_outputs": ["translated_text"],
+                    "target_inputs": ["query"],
+                },
+                accepted=True,
+            ),
+            LLMMatch(
+                source_id="general-writing",
+                target_id="imap-smtp-email",
+                relation_type="can_feed",
+                confidence=0.9,
+                method="test_matcher",
+                supporting_fields={
+                    "port_mappings": [
+                        {
+                            "source_output": "document",
+                            "target_input": "body",
+                        }
+                    ],
+                    "source_outputs": ["document"],
+                    "target_inputs": ["body"],
+                },
+                accepted=True,
+            ),
+        ]
+
+
+class FirstPlanRanker:
+    def rerank(self, planning_result, *, top_k=3, top_m=12, include_candidates=True):
+        result = dict(planning_result)
+        plans = list(planning_result.get("plans", []))
+        result["recommended_plans"] = plans[:top_k]
+        result["ranking_mode"] = "test"
+        result["rank_trace"] = {"top_k": top_k, "top_m": top_m}
+        if not include_candidates:
+            result.pop("plans", None)
+        return result
+
+
 def test_planning_config_exposes_entry_width_and_conservative_flags() -> None:
     cfg = PlanningConfig()
     assert hasattr(cfg, "max_entry_skills")
@@ -363,6 +417,97 @@ def test_augment_with_structural_incomplete_plans_noop_for_simple_query() -> Non
     assert output == validated
 
 
+def test_orchestrator_uses_port_edges_and_inferred_control_inputs(
+    tmp_path: Path,
+) -> None:
+    result = GraphBuilder(matcher=PortFlowMatcher()).build(
+        [
+            _image_translation_skill(),
+            _general_writing_skill(),
+            _email_skill(),
+        ]
+    )
+    write_graph_build_result(result, tmp_path)
+
+    planner = SkillOrchestrator(
+        load_build_artifacts(tmp_path),
+        llm_client=FakeGroundingClient(
+            {
+                "available_artifacts": [
+                    {"name": "image_url", "type": "url"},
+                ],
+                "inferred_inputs": [
+                    {
+                        "skill_id": "xiaoyi-image-translation",
+                        "name": "target_language",
+                        "type": "text",
+                        "value": "zh-CHS",
+                    },
+                    {
+                        "skill_id": "imap-smtp-email",
+                        "name": "command",
+                        "type": "text",
+                        "value": "send",
+                    },
+                    {
+                        "skill_id": "imap-smtp-email",
+                        "name": "to",
+                        "type": "text",
+                        "value": "王总",
+                    },
+                ],
+                "goal_terms": [
+                    "translate",
+                    "image",
+                    "writing",
+                    "document",
+                    "email",
+                    "send",
+                ],
+            }
+        ),
+        ranker=FirstPlanRanker(),
+        min_edge_confidence=0.7,
+        max_depth=4,
+        max_plans=20,
+        top_k=5,
+    )
+
+    response = planner.plan("翻译图中的英文报告，然后提炼前三页核心观点发邮件给王总")
+    plan = next(
+        item
+        for item in response["plans"]
+        if [step["skill_id"] for step in item["steps"]]
+        == [
+            "xiaoyi-image-translation",
+            "general-writing",
+            "imap-smtp-email",
+        ]
+    )
+
+    assert ("imap-smtp-email", "command") not in {
+        (item["skill_id"], item["name"]) for item in plan["missing_inputs"]
+    }
+    assert ("imap-smtp-email", "to") in {
+        (item["skill_id"], item["name"]) for item in plan["missing_inputs"]
+    }
+    email_step = next(
+        step for step in plan["steps"] if step["skill_id"] == "imap-smtp-email"
+    )
+    assert {
+        (item["name"], item["value"]) for item in email_step["filled_inputs"]
+    } == {("command", "send")}
+    edge_ports = [
+        mapping
+        for edge in plan["can_feed_edges"]
+        for mapping in edge["port_mappings"]
+    ]
+    assert {
+        (mapping["source_output"], mapping["target_input"])
+        for mapping in edge_ports
+    } >= {("translated_text", "query"), ("document", "body")}
+
+
 def _make_api_skill() -> SkillRepresentation:
     return SkillRepresentation(
         id="make_api",
@@ -402,6 +547,52 @@ def _deploy_api_skill() -> SkillRepresentation:
         outputs=[ArtifactSpec(name="deployment_plan", type="markdown")],
         preconditions=[],
         postconditions=[],
+    )
+
+
+def _image_translation_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="xiaoyi-image-translation",
+        name="Image Translation",
+        description="Recognize and translate text in images.",
+        version="1.0.0",
+        inputs=[
+            ParameterSpec(name="image_url", type="url", required=False),
+            ParameterSpec(name="target_language", type="text"),
+        ],
+        outputs=[
+            ArtifactSpec(name="translated_text", type="text"),
+            ArtifactSpec(name="ocr_text", type="text"),
+        ],
+    )
+
+
+def _general_writing_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="general-writing",
+        name="General Writing",
+        description="Write markdown from a request and source material.",
+        version="1.0.0",
+        inputs=[
+            ParameterSpec(name="query", type="text"),
+            ParameterSpec(name="sources", type="json", required=False),
+        ],
+        outputs=[ArtifactSpec(name="document", type="markdown")],
+    )
+
+
+def _email_skill() -> SkillRepresentation:
+    return SkillRepresentation(
+        id="imap-smtp-email",
+        name="IMAP SMTP Email",
+        description="Send email using SMTP.",
+        version="1.0.0",
+        inputs=[
+            ParameterSpec(name="command", type="text"),
+            ParameterSpec(name="to", type="text"),
+            ParameterSpec(name="body", type="text", required=False),
+        ],
+        outputs=[ArtifactSpec(name="confirmation", type="text")],
     )
 
 

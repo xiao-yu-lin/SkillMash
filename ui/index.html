@@ -579,11 +579,6 @@
           <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#f4a261"></i> Artifact</span><span>节点</span></div>
           <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#ffd166"></i> Slot</span><span>节点</span></div>
           <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#ffffff"></i> can_feed</span><span>关系</span></div>
-          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#ffd166"></i> produces</span><span>关系</span></div>
-          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#f4a261"></i> consumes</span><span>关系</span></div>
-          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#e9c46a"></i> aggregates</span><span>关系</span></div>
-          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#73a7ff"></i> similar_to</span><span>关系</span></div>
-          <div class="legend-item"><span><i class="swatch" style="display:inline-block;background:#d87bff"></i> substitute_for</span><span>关系</span></div>
         </div>
       </div>
 
@@ -706,6 +701,8 @@
       unknown: "#a8b0bf"
     };
 
+    const supportedRelationTypes = new Set(["can_feed"]);
+
     let graph = { nodes: [], edges: [] };
     let visible = { nodes: [], edges: [] };
     let skillsById = new Map();
@@ -792,7 +789,9 @@
         }
       }
 
-      const edges = rawEdges.map(normalizeEdge).filter(edge => edge.source && edge.target);
+      const edges = rawEdges
+        .map(normalizeEdge)
+        .filter(edge => edge.source && edge.target && supportedRelationTypes.has(edge.type));
       edges.forEach(edge => {
         if (!nodeMap.has(edge.source)) nodeMap.set(edge.source, normalizeNode({ id: edge.source }, nodeMap.size));
         if (!nodeMap.has(edge.target)) nodeMap.set(edge.target, normalizeNode({ id: edge.target }, nodeMap.size));
@@ -1172,15 +1171,7 @@
     }
 
     function edgeColor(type) {
-      if (type === "has_output") return "#4db6ac";
-      if (type === "requires_input") return "#4db6ac";
       if (type === "can_feed") return "#ffffff";
-      if (type === "produces") return "#ffd166";
-      if (type === "consumes") return "#f4a261";
-      if (type === "aggregates") return "#e9c46a";
-      if (type === "depends_on") return "#8ecae6";
-      if (type === "similar_to") return "#73a7ff";
-      if (type === "substitute_for") return "#d87bff";
       return "#7d8797";
     }
 

@@ -198,6 +198,57 @@ def test_plan_reranker_backfills_when_llm_returns_too_few() -> None:
     assert len(reranked["recommended_plans"]) == 3
 
 
+def test_plan_reranker_backfill_prefers_relevant_needs_input_over_unrelated_ready() -> None:
+    planning = {
+        "query": "翻译图中的英文，写成一篇文章发邮件给王总",
+        "grounded_query": {
+            "goal_terms": ["翻译", "图中", "英文", "文章", "邮件"]
+        },
+        "plans": [
+            {
+                "status": "ready",
+                "goal_score": 1.0,
+                "edge_confidence": 1.0,
+                "steps": [{"skill_id": "movie-producer-scene"}],
+                "missing_inputs": [],
+            },
+            {
+                "status": "needs_input",
+                "goal_score": 84.0,
+                "edge_confidence": 1.0,
+                "steps": [{"skill_id": "xiaoyi-image-translation"}],
+                "missing_inputs": [
+                    {
+                        "skill_id": "xiaoyi-image-translation",
+                        "name": "target_language",
+                        "type": "text",
+                    }
+                ],
+            },
+            {
+                "status": "ready",
+                "goal_score": 0.0,
+                "edge_confidence": 0.9,
+                "steps": [
+                    {"skill_id": "movie-producer-scene"},
+                    {"skill_id": "minimax-music-gen"},
+                ],
+                "missing_inputs": [],
+            },
+        ],
+    }
+
+    reranked = PlanReranker(llm_client=InvalidJsonRerankClient()).rerank(
+        planning,
+        top_k=2,
+    )
+
+    assert [item["source_plan_index"] for item in reranked["recommended_plans"]] == [
+        2,
+        1,
+    ]
+
+
 def test_plan_reranker_fallback_prefers_high_goal_score_over_shorter_path() -> None:
     planning = {
         "query": "simple request",

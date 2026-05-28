@@ -26,6 +26,7 @@ COMPATIBLE_CAN_FEED_TYPES = frozenset(
         ("path", "file"),       # 路径可以指向文件
     }
 )
+CONTENT_CARRIER_TYPES = frozenset({"text", "markdown", "json"})
 GENERIC_TEXT_INPUT_NAMES = frozenset(
     {
         "body",
@@ -39,6 +40,31 @@ GENERIC_TEXT_INPUT_NAMES = frozenset(
         "transcript",
     }
 )
+CONTENT_INPUT_NAMES = GENERIC_TEXT_INPUT_NAMES | frozenset({"sources"})
+CONTROL_INPUT_NAMES = frozenset(
+    {
+        "account",
+        "before",
+        "category",
+        "command",
+        "dir",
+        "file",
+        "format",
+        "html",
+        "language_code",
+        "limit",
+        "mailbox",
+        "model_id",
+        "recent",
+        "seen",
+        "since",
+        "target_language",
+        "template_id",
+        "uid",
+        "unseen",
+    }
+)
+DESTINATION_INPUT_NAMES = frozenset({"to", "cc", "bcc", "from"})
 TEXTUAL_OUTPUT_TERMS = frozenset(
     {
         "article",
@@ -85,11 +111,13 @@ class CandidateGenerator:
         self,
         *,
         max_candidates_per_skill_relation: int = 12,
+        max_port_mappings_per_candidate: int = 12,
         generic_io_names: Iterable[str] = DEFAULT_GRAPH_CANDIDATE_GENERIC_IO_NAMES,
         max_exact_io_pair_fanout: int = 64,
         max_text_term_bucket_size: int = 12,
     ) -> None:
         self.max_candidates_per_skill_relation = max_candidates_per_skill_relation
+        self.max_port_mappings_per_candidate = max(1, max_port_mappings_per_candidate)
         self.lexicon = ArtifactLexicon.create(
             stop_terms=DEFAULT_GRAPH_STOP_TERMS,
             min_token_length=3,
@@ -180,6 +208,21 @@ class CandidateGenerator:
                                         (target_id, name)
                                     ]
                                 ],
+                                "port_mappings": [
+                                    _port_mapping(
+                                        output,
+                                        parameter,
+                                        match_method="exact_io_match",
+                                        match_reason="source output and target input share the same normalized name and type",
+                                    )
+                                    for output in indexes.outputs_by_skill_name[
+                                        (source_id, name)
+                                    ]
+                                    for parameter in indexes.inputs_by_skill_name[
+                                        (target_id, name)
+                                    ]
+                                    if output.type == parameter.type
+                                ],
                             },
                         ),
                     )
@@ -202,6 +245,12 @@ class CandidateGenerator:
                             continue
                         if not _can_feed_by_field_overlap(output, parameter):
                             continue
+                        mapping = _port_mapping(
+                            output,
+                            parameter,
+                            match_method="compatible_type_match",
+                            match_reason=_match_reason(output, parameter),
+                        )
                         self._merge_candidate(
                             candidates,
                             RelationCandidate(
@@ -214,6 +263,7 @@ class CandidateGenerator:
                                     "matched_terms": shared_terms,
                                     "source_outputs": [output.to_dict()],
                                     "target_inputs": [parameter.to_dict()],
+                                    "port_mappings": [mapping],
                                     "matched_type": f"{output.type}->{parameter.type}",
                                 },
                             ),
@@ -238,13 +288,16 @@ class CandidateGenerator:
         }
         existing = candidates.get(key)
         if existing is None:
-            candidates[key] = RelationCandidate(
-                source_id=candidate.source_id,
-                target_id=candidate.target_id,
-                relation_hints=sorted(set(relation_hints)),
-                candidate_methods=sorted(set(candidate.candidate_methods)),
-                priority=candidate.priority,
-                evidence=candidate_evidence,
+            candidates[key] = _limit_port_mappings_for_candidate(
+                RelationCandidate(
+                    source_id=candidate.source_id,
+                    target_id=candidate.target_id,
+                    relation_hints=sorted(set(relation_hints)),
+                    candidate_methods=sorted(set(candidate.candidate_methods)),
+                    priority=candidate.priority,
+                    evidence=candidate_evidence,
+                ),
+                self.max_port_mappings_per_candidate,
             )
             return
 
@@ -264,6 +317,10 @@ class CandidateGenerator:
             ),
             priority=priority,
             evidence=evidence,
+        )
+        candidates[key] = _limit_port_mappings_for_candidate(
+            candidates[key],
+            self.max_port_mappings_per_candidate,
         )
 
     def _limit_per_skill_relation(
@@ -361,6 +418,61 @@ def _merge_directional_evidence(
     return merged
 
 
+def _limit_port_mappings_for_candidate(
+    candidate: RelationCandidate,
+    max_port_mappings: int,
+) -> RelationCandidate:
+    directions = {}
+    for direction, evidence in dict(candidate.evidence.get("directions", {})).items():
+        if not isinstance(evidence, dict):
+            directions[direction] = evidence
+            continue
+        limited_evidence = dict(evidence)
+        mappings = [
+            mapping
+            for mapping in limited_evidence.get("port_mappings", [])
+            if isinstance(mapping, dict)
+        ]
+        limited_evidence["port_mappings"] = _dedupe_port_mappings(
+            sorted(mappings, key=_port_mapping_sort_key)
+        )[:max_port_mappings]
+        directions[direction] = limited_evidence
+    return RelationCandidate(
+        source_id=candidate.source_id,
+        target_id=candidate.target_id,
+        relation_hints=candidate.relation_hints,
+        candidate_methods=candidate.candidate_methods,
+        priority=candidate.priority,
+        evidence={**candidate.evidence, "directions": directions},
+    )
+
+
+def _dedupe_port_mappings(values: List[dict]) -> List[dict]:
+    seen = set()
+    result = []
+    for value in values:
+        marker = (
+            value.get("source_output"),
+            value.get("source_type"),
+            value.get("target_input"),
+            value.get("target_type"),
+        )
+        if marker in seen:
+            continue
+        seen.add(marker)
+        result.append(value)
+    return result
+
+
+def _port_mapping_sort_key(mapping: dict) -> tuple[int, str, str]:
+    method_rank = 0 if mapping.get("match_method") == "exact_io_match" else 1
+    return (
+        method_rank,
+        str(mapping.get("source_output") or ""),
+        str(mapping.get("target_input") or ""),
+    )
+
+
 def _dedupe_list(values: List[object]) -> List[object]:
     seen = set()
     result = []
@@ -408,6 +520,8 @@ def _skill_terms(skill: SkillRepresentation) -> Set[str]:
 def _can_feed_by_field_overlap(output: ArtifactSpec, parameter: ParameterSpec) -> bool:
     if output.name == parameter.name:
         return True
+    if _is_control_or_destination_input(parameter) or _is_control_output(output):
+        return False
     output_terms = _tokenize(f"{output.name} {output.description}") - CAN_FEED_WEAK_TERMS
     input_terms = _tokenize(f"{parameter.name} {parameter.description}") - CAN_FEED_WEAK_TERMS
     if output_terms & input_terms:
@@ -419,6 +533,8 @@ def _can_feed_by_type(output_type: str, input_type: str) -> bool:
     if output_type == "unknown" or input_type == "unknown":
         return False
     if output_type == input_type:
+        return True
+    if output_type in CONTENT_CARRIER_TYPES and input_type in CONTENT_CARRIER_TYPES:
         return True
     return (output_type, input_type) in COMPATIBLE_CAN_FEED_TYPES
 
@@ -445,6 +561,60 @@ def _is_generic_text_input(parameter: ParameterSpec, input_terms: Set[str]) -> b
 
 def _is_textual_output(output: ArtifactSpec, output_terms: Set[str]) -> bool:
     return output.name in TEXTUAL_OUTPUT_TERMS or bool(output_terms & TEXTUAL_OUTPUT_TERMS)
+
+
+def _can_feed_via_textual_coercion(
+    output: ArtifactSpec,
+    parameter: ParameterSpec,
+    output_terms: Set[str],
+    input_terms: Set[str],
+) -> bool:
+    if output.type not in CONTENT_CARRIER_TYPES or parameter.type not in CONTENT_CARRIER_TYPES:
+        return False
+    if not _is_generic_content_input(parameter, input_terms):
+        return False
+    return True
+
+
+def _is_generic_content_input(parameter: ParameterSpec, input_terms: Set[str]) -> bool:
+    if _is_control_or_destination_input(parameter):
+        return False
+    return parameter.name in CONTENT_INPUT_NAMES or bool(
+        input_terms & CONTENT_INPUT_NAMES
+    )
+
+
+def _is_control_or_destination_input(parameter: ParameterSpec) -> bool:
+    return parameter.name in CONTROL_INPUT_NAMES or parameter.name in DESTINATION_INPUT_NAMES
+
+
+def _is_control_output(output: ArtifactSpec) -> bool:
+    return output.name in CONTROL_INPUT_NAMES or output.name in DESTINATION_INPUT_NAMES
+
+
+def _port_mapping(
+    output: ArtifactSpec,
+    parameter: ParameterSpec,
+    *,
+    match_method: str,
+    match_reason: str,
+) -> dict:
+    return {
+        "source_output": output.name,
+        "source_type": output.type,
+        "target_input": parameter.name,
+        "target_type": parameter.type,
+        "match_reason": match_reason,
+        "match_method": match_method,
+    }
+
+
+def _match_reason(output: ArtifactSpec, parameter: ParameterSpec) -> str:
+    if output.name == parameter.name:
+        return "source output and target input share the same normalized name"
+    if output.type in CONTENT_CARRIER_TYPES and parameter.type in CONTENT_CARRIER_TYPES:
+        return "textual content can be adapted as target content input"
+    return "source output carrier can satisfy target input carrier"
 
 
 def _tokenize(text: str) -> Set[str]:

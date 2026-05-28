@@ -11,7 +11,12 @@ from skillmash.orchestration.planning.constants import (
     DEFAULT_USER_ARTIFACTS,
     LLM_GROUNDING_SYSTEM_PROMPT,
 )
-from skillmash.orchestration.planning.models import ArtifactRef, GroundedQuery, GroundingClient
+from skillmash.orchestration.planning.models import (
+    ArtifactRef,
+    GroundedQuery,
+    GroundingClient,
+    InferredInput,
+)
 from skillmash.orchestration.planning.utils import tokenize
 
 
@@ -35,6 +40,7 @@ def ground_query(
         llm_client=llm_client,
     )
     query_terms = set(llm_grounding.get("goal_terms", set()))
+    query_terms.update(tokenize(query))
     available = merge_artifacts(
         implicit_artifacts(),
         llm_grounding.get("available_artifacts", []),
@@ -43,11 +49,16 @@ def ground_query(
         query_terms=query_terms,
         artifacts=artifacts,
     )
+    inferred_inputs = merge_inferred_inputs(
+        llm_grounding.get("inferred_inputs", []),
+        deterministic_inferred_inputs(query, artifacts),
+    )
     return GroundedQuery(
         query=query,
         query_terms=query_terms,
         available_artifacts=available,
         goal_terms=goal_terms,
+        inferred_inputs=inferred_inputs,
     )
 
 
@@ -71,7 +82,11 @@ def ground_query_with_llm(
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Invalid query grounding JSON: {raw[:500]}") from exc
-    return normalize_llm_grounding(parsed, known_artifact_refs(artifacts))
+    return normalize_llm_grounding(
+        parsed,
+        known_artifact_refs(artifacts),
+        known_inferred_input_refs(artifacts),
+    )
 
 
 def known_artifact_refs(artifacts: BuildArtifacts) -> dict[tuple[str, str], ArtifactRef]:
@@ -83,6 +98,27 @@ def known_artifact_refs(artifacts: BuildArtifacts) -> dict[tuple[str, str], Arti
             source="llm_grounding",
         )
         refs[ref.key] = ref
+    return refs
+
+
+def known_inferred_input_refs(
+    artifacts: BuildArtifacts,
+) -> dict[tuple[str, str, str], InferredInput]:
+    refs = {}
+    for skill in artifacts.skills:
+        skill_id = str(skill.get("id") or "")
+        if not skill_id:
+            continue
+        for item in skill.get("inputs", []):
+            name = str(item.get("name") or "")
+            if not name:
+                continue
+            type_ = str(item.get("type") or "unknown")
+            refs[(skill_id, name, type_)] = InferredInput(
+                skill_id=skill_id,
+                name=name,
+                type=type_,
+            )
     return refs
 
 
@@ -150,6 +186,7 @@ def artifact_vocab_payload(artifacts: BuildArtifacts) -> list[dict[str, Any]]:
 def normalize_llm_grounding(
     payload: dict[str, Any],
     known_refs: dict[tuple[str, str], ArtifactRef],
+    known_inferred_refs: dict[tuple[str, str, str], InferredInput] | None = None,
 ) -> dict[str, Any]:
     normalized_artifacts = []
     for item in payload.get("available_artifacts", []):
@@ -171,10 +208,172 @@ def normalize_llm_grounding(
     goal_terms = set()
     for term in payload.get("goal_terms", []):
         goal_terms.update(tokenize(str(term)))
+    inferred_inputs = normalize_inferred_inputs(
+        payload.get("inferred_inputs", []),
+        known_inferred_refs or {},
+    )
     return {
         "available_artifacts": normalized_artifacts,
+        "inferred_inputs": inferred_inputs,
         "goal_terms": goal_terms,
     }
+
+
+INFERABLE_INPUT_NAMES = {
+    "auto_emotion",
+    "backend",
+    "category",
+    "command",
+    "format",
+    "html",
+    "language_code",
+    "model_id",
+    "output_spec",
+    "publish_channel",
+    "song_type",
+    "target_language",
+    "variant_mode",
+}
+
+
+def normalize_inferred_inputs(
+    values: Any,
+    known_refs: dict[tuple[str, str, str], InferredInput],
+) -> list[InferredInput]:
+    if not isinstance(values, list):
+        return []
+    normalized = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        skill_id = str(item.get("skill_id") or "")
+        name = str(item.get("name") or "")
+        if not skill_id or not name or name not in INFERABLE_INPUT_NAMES:
+            continue
+        type_ = str(item.get("type") or "unknown")
+        ref = known_refs.get((skill_id, name, type_))
+        if ref is None:
+            matching = [
+                candidate
+                for key, candidate in known_refs.items()
+                if key[0] == skill_id and key[1] == name
+            ]
+            ref = matching[0] if matching else None
+        if ref is None:
+            continue
+        value = item.get("value")
+        if value is None or str(value).strip() == "":
+            continue
+        normalized.append(
+            InferredInput(
+                skill_id=ref.skill_id,
+                name=ref.name,
+                type=ref.type,
+                value=value,
+            )
+        )
+    return normalized
+
+
+def deterministic_inferred_inputs(
+    query: str,
+    artifacts: BuildArtifacts,
+) -> list[InferredInput]:
+    """Recover obvious control inputs that are easy for LLM grounding to miss."""
+
+    query_text = str(query or "").lower()
+    refs = known_inferred_input_refs(artifacts)
+    inferred: list[InferredInput] = []
+
+    if _looks_like_send_email_request(query_text):
+        inferred.extend(
+            _inferred_for_input(
+                refs,
+                name="command",
+                value="send",
+                skill_predicate=_looks_like_email_skill,
+            )
+        )
+
+    target_language = _deterministic_translation_target(query_text)
+    if target_language:
+        inferred.extend(
+            _inferred_for_input(
+                refs,
+                name="target_language",
+                value=target_language,
+                skill_predicate=_looks_like_image_translation_skill,
+            )
+        )
+
+    return inferred
+
+
+def _inferred_for_input(
+    refs: dict[tuple[str, str, str], InferredInput],
+    *,
+    name: str,
+    value: str,
+    skill_predicate,
+) -> list[InferredInput]:
+    output: list[InferredInput] = []
+    for (skill_id, input_name, _), ref in refs.items():
+        if input_name != name or not skill_predicate(skill_id):
+            continue
+        output.append(
+            InferredInput(
+                skill_id=ref.skill_id,
+                name=ref.name,
+                type=ref.type,
+                value=value,
+                source="deterministic_grounding",
+            )
+        )
+    return output
+
+
+def _looks_like_send_email_request(query_text: str) -> bool:
+    send_terms = ("发邮件", "发送邮件", "send email", "email")
+    return any(term in query_text for term in send_terms)
+
+
+def _deterministic_translation_target(query_text: str) -> str | None:
+    if "翻译" not in query_text and "translate" not in query_text:
+        return None
+    if any(term in query_text for term in ("翻译成英文", "译成英文", "to english")):
+        return "en"
+    if _contains_cjk(query_text) and any(
+        term in query_text for term in ("英文", "english")
+    ):
+        return "zh-CHS"
+    return None
+
+
+def _contains_cjk(text: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in text)
+
+
+def _looks_like_email_skill(skill_id: str) -> bool:
+    text = skill_id.lower()
+    return "email" in text or "smtp" in text or "mail" in text
+
+
+def _looks_like_image_translation_skill(skill_id: str) -> bool:
+    text = skill_id.lower()
+    return "image" in text and ("translation" in text or "translate" in text)
+
+
+def merge_inferred_inputs(
+    base: list[InferredInput],
+    extra: Iterable[InferredInput],
+) -> list[InferredInput]:
+    merged = {(item.skill_id, item.name): item for item in extra}
+    for item in base:
+        merged[(item.skill_id, item.name)] = item
+    return sorted(
+        merged.values(),
+        key=lambda item: (item.skill_id, item.name, item.type, str(item.value)),
+    )
 
 
 def merge_artifacts(

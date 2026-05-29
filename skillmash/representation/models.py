@@ -61,7 +61,6 @@ class ParameterSpec:
     required: bool = True
     description: str = ""
     default: Any = None
-    schema_ref: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -70,7 +69,6 @@ class ParameterSpec:
             "required": self.required,
             "description": self.description,
             "default": self.default,
-            "schema_ref": self.schema_ref,
         }
 
 
@@ -81,14 +79,12 @@ class ArtifactSpec:
     name: str
     type: str
     description: str = ""
-    schema_ref: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "type": self.type,
             "description": self.description,
-            "schema_ref": self.schema_ref,
         }
 
 
@@ -138,7 +134,6 @@ class SkillRepresentation:
                     required=bool(item.get("required", True)),
                     description=str(item.get("description") or ""),
                     default=item.get("default"),
-                    schema_ref=item.get("schema_ref"),
                 )
                 for item in payload.get("inputs", [])
             ],
@@ -147,7 +142,6 @@ class SkillRepresentation:
                     name=str(item.get("name") or "result"),
                     type=str(item.get("type") or "unknown"),
                     description=str(item.get("description") or ""),
-                    schema_ref=item.get("schema_ref"),
                 )
                 for item in payload.get("outputs", [])
             ],

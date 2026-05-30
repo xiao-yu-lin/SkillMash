@@ -161,14 +161,8 @@ class NormalizationConfig:
       or markdown.
     """
 
-    # Representation contract version consumed by downstream graph builders.
-    schema_version: str = "skill-representation-v1"
-
     # Dynamic vocabulary version for normalized I/O semantic names.
     io_name_vocab_version: str = "io-name-vocab-v1"
-
-    # Controlled DataType vocabulary version.
-    data_type_vocab_version: str = "data-type-v1"
 
     # Optional soft cap for canonical I/O name terms. None means the
     # vocabulary can grow with the observed Skill corpus instead of forcing
@@ -193,75 +187,6 @@ class NormalizationConfig:
 
     # Type used when a data representation cannot be recognized.
     unknown_type: str = "unknown"
-
-    # Controlled DataType vocabulary for representation formats/carriers.
-    data_type_vocab: frozenset = frozenset(
-        {
-            "text",
-            "markdown",
-            "json",
-            "csv",
-            "yaml",
-            "pdf",
-            "html",
-            "docx",
-            "pptx",
-            "xlsx",
-            "png",
-            "jpg",
-            "svg",
-            "url",
-            "file",
-            "path",
-            "audio",
-            "video",
-            "code",
-            "unknown",
-        }
-    )
-
-    # DataType aliases collapse free-form LLM types into data_type_vocab.
-    data_type_aliases: Dict[str, str] = field(
-        default_factory=lambda: {
-            "natural_language": "text",
-            "natural_language_query": "text",
-            "plain_text": "text",
-            "query": "text",
-            "summary": "text",
-            "report": "markdown",
-            "link": "url",
-            "uri": "url",
-            "webpage": "url",
-            "spreadsheet": "csv",
-            "dataframe": "csv",
-            "md": "markdown",
-            "yml": "yaml",
-            "json_object": "json",
-            "slides": "pptx",
-            "presentation": "pptx",
-            "powerpoint": "pptx",
-            "ppt": "pptx",
-            "jpeg": "jpg",
-            "source_code": "code",
-            "code_file": "code",
-            "kernel_code": "code",
-            "operator_code": "code",
-            "cpp_code": "code",
-            "python_code": "code",
-            "javascript_code": "code",
-            "program": "code",
-            "shell_script": "code",
-            "chart": "png",
-            "flowchart": "svg",
-            "mermaid": "text",
-            "paper": "pdf",
-            "academic_paper": "pdf",
-            "publication": "pdf",
-        }
-    )
-
-    # I/O name aliases start empty so the configured resolver can grow io_name_vocab.
-    io_name_aliases: Dict[str, str] = field(default_factory=dict)
 
 @dataclass(frozen=True)
 class NormalizationDecision:

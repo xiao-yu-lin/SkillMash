@@ -6,9 +6,15 @@ from skillmash.representation.normalize.base_vocab import (
     BaseResolver,
     BaseVocabTerm,
     BaseVocabulary,
+    DynamicVocabulary,
     HeuristicBaseResolver,
     NON_RUNTIME_HINTS,
+    StaticVocabulary,
     term_similarity,
+)
+from skillmash.representation.normalize.data_type_vocab import (
+    DataTypeResolution,
+    DataTypeVocabulary,
 )
 from skillmash.representation.normalize.io_name_vocab import (
     HeuristicIONameResolver,
@@ -28,9 +34,14 @@ __all__ = [
     "BaseResolver",
     "BaseVocabTerm",
     "BaseVocabulary",
+    "DynamicVocabulary",
     "HeuristicBaseResolver",
     "NON_RUNTIME_HINTS",
+    "StaticVocabulary",
     "term_similarity",
+    # DataType vocabulary
+    "DataTypeResolution",
+    "DataTypeVocabulary",
     # I/O name vocabulary
     "HeuristicIONameResolver",
     "IONameCandidate",

@@ -7,6 +7,7 @@ from threading import RLock
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from skillmash.representation.normalize.base_vocab import term_similarity
+from skillmash.representation.normalize.data_type_vocab import DataTypeVocabulary
 from skillmash.representation.normalize.io_name_vocab import (
     HeuristicIONameResolver,
     IONameCandidate,
@@ -52,6 +53,7 @@ class SkillRepresentationNormalizer:
         io_name_resolver: Optional[IONameResolver] = None,
     ) -> None:
         self.config = config or NormalizationConfig()
+        self.data_type_vocabulary = DataTypeVocabulary.from_config(self.config)
         self.io_name_vocabulary = (
             io_name_vocabulary
             or IONameVocabulary.from_config(self.config)
@@ -222,7 +224,7 @@ class SkillRepresentationNormalizer:
                 normalized_value=self.config.default_input_type,
                 method="default",
                 vocab="data_type_vocab",
-                vocab_version=self.config.data_type_vocab_version,
+                vocab_version=self.data_type_vocabulary.version,
                 confidence=1.0,
             )
             return [
@@ -315,7 +317,7 @@ class SkillRepresentationNormalizer:
                 normalized_value=self.config.unknown_type,
                 method="default_unknown",
                 vocab="data_type_vocab",
-                vocab_version=self.config.data_type_vocab_version,
+                vocab_version=self.data_type_vocabulary.version,
                 confidence=0.0,
             )
             return [
@@ -622,6 +624,7 @@ class SkillRepresentationNormalizer:
                 resolution.normalized_value or token,
                 alias=token,
                 example=description,
+                definition=resolution.definition,
             )
 
         target = resolution.normalized_value or self.io_name_vocabulary.closest_term(token)
@@ -630,6 +633,7 @@ class SkillRepresentationNormalizer:
                 token,
                 alias=token,
                 example=description,
+                definition=description,
             )
         if target not in self.io_name_vocabulary.term_names():
             target = self.io_name_vocabulary.closest_term(target) or target
@@ -637,6 +641,7 @@ class SkillRepresentationNormalizer:
             token,
             target,
             example=description,
+            definition=resolution.definition,
         )
         return target
 
@@ -686,8 +691,8 @@ class SkillRepresentationNormalizer:
         decisions: List[NormalizationDecision],
     ) -> str:
         token = normalize_token(raw_type)
-        normalized = self.config.data_type_aliases.get(token, token)
-        if normalized in self.config.data_type_vocab:
+        resolution = self.data_type_vocabulary.resolve(token)
+        if resolution.normalized_value is not None:
             self._record_decision(
                 decisions,
                 skill_id=skill_id,
@@ -696,13 +701,13 @@ class SkillRepresentationNormalizer:
                 field="type",
                 raw_value=raw_type,
                 token=token,
-                normalized_value=normalized,
-                method="alias_map" if normalized != token else "exact",
+                normalized_value=resolution.normalized_value,
+                method=resolution.method,
                 vocab="data_type_vocab",
-                vocab_version=self.config.data_type_vocab_version,
-                confidence=0.95 if normalized != token else 1.0,
+                vocab_version=self.data_type_vocabulary.version,
+                confidence=resolution.confidence,
             )
-            return normalized
+            return resolution.normalized_value
 
         diagnostics.append(
             ExtractionDiagnostic(
@@ -723,13 +728,13 @@ class SkillRepresentationNormalizer:
             field="type",
             raw_value=raw_type,
             token=token,
-            normalized_value=self.config.unknown_type,
+            normalized_value=self.data_type_vocabulary.unknown_type,
             method="unknown",
             vocab="data_type_vocab",
-            vocab_version=self.config.data_type_vocab_version,
+            vocab_version=self.data_type_vocabulary.version,
             confidence=0.0,
         )
-        return self.config.unknown_type
+        return self.data_type_vocabulary.unknown_type
 
     def _record_decision(
         self,
@@ -783,7 +788,7 @@ class SkillRepresentationNormalizer:
                 )
             )
         for item in [*representation.inputs, *representation.outputs]:
-            if item.type not in self.config.data_type_vocab:
+            if not self.data_type_vocabulary.contains(item.type):
                 diagnostics.append(
                     ExtractionDiagnostic(
                         stage="normalization",

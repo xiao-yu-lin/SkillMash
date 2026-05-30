@@ -18,7 +18,7 @@ from skillmash.representation.normalize.base_vocab import (
     BaseResolution,
     BaseResolver,
     BaseVocabTerm,
-    BaseVocabulary,
+    DynamicVocabulary,
     HeuristicBaseResolver,
     _max_vocab_size_from_data,
     _normalize_max_vocab_size,
@@ -54,7 +54,7 @@ IONameResolver = BaseResolver
 IONameVocabTerm = BaseVocabTerm
 
 
-class IONameVocabulary(BaseVocabulary):
+class IONameVocabulary(DynamicVocabulary):
     """Mutable io_name_vocab with bounded canonical terms and unbounded aliases.
 
     This vocabulary manages I/O name terms used for graph linking.
@@ -63,16 +63,10 @@ class IONameVocabulary(BaseVocabulary):
     @classmethod
     def from_config(cls, config: NormalizationConfig) -> "IONameVocabulary":
         """Build vocabulary from NormalizationConfig."""
-        terms: Dict[str, IONameVocabTerm] = {}
-        for alias, name in config.io_name_aliases.items():
-            term = terms.setdefault(name, IONameVocabTerm(name=name))
-            term.aliases.add(alias)
-        for name, term in list(terms.items()):
-            term.aliases.discard(name)
         return cls(
             version=config.io_name_vocab_version,
             max_vocab_size=config.max_vocab_size,
-            terms=list(terms.values()),
+            terms=[],
         )
 
     @classmethod
@@ -296,8 +290,10 @@ def _resolution_from_payload(
 
     target = payload.get("target") or payload.get("normalized_value") or payload.get("normalized_name")
     normalized_value = str(target).strip() if target is not None else None
+    definition = str(payload.get("definition") or "").strip()
     if action == "exclude_non_runtime":
         normalized_value = None
+        definition = ""
     elif action in {"alias_existing", "merge_existing"}:
         if normalized_value not in vocabulary.term_names():
             normalized_value = vocabulary.closest_term(normalized_value or "") or normalized_value
@@ -311,6 +307,7 @@ def _resolution_from_payload(
         confidence=_coerce_confidence(payload.get("confidence")),
         reason=str(payload.get("reason") or ""),
         forced_merge=bool(payload.get("forced_merge")) or action == "merge_existing",
+        definition=definition,
     )
 
 
@@ -329,11 +326,19 @@ Return JSON only:
   "action": "alias_existing|create_new|merge_existing|exclude_non_runtime",
   "target": "existing_or_new_vocab_term_or_null",
   "confidence": 0.0,
-  "reason": "short explanation"
+  "reason": "short explanation",
+  "definition": "semantic definition or enrichment suggestion"
 }
 
+Rules for definition (all definitions will be merged with existing term definitions):
+- create_new: REQUIRED - Provide a concise semantic definition based on candidate's description.
+- alias_existing: OPTIONAL - Provide supplementary info to enrich the existing term's definition.
+- merge_existing: OPTIONAL - Provide a summary of the candidate's semantics to enrich the target term.
+- exclude_non_runtime: NOT NEEDED - Excluded terms do not enter the vocabulary.
+
 Use input/output names as semantic vocab terms for graph linking. The type field
-is only the data representation, not the semantic role.
+is only the data representation, not the semantic role. Existing terms have definitions
+in the vocabulary context - use them to judge semantic equivalence.
 """
 
 _IO_NAME_BATCH_RESOLVER_PROMPT = """Resolve new Skill input/output names against io_name_vocab.
@@ -346,12 +351,20 @@ Return JSON only:
       "action": "alias_existing|create_new|merge_existing|exclude_non_runtime",
       "target": "existing_or_new_vocab_term_or_null",
       "confidence": 0.0,
-      "reason": "short explanation"
+      "reason": "short explanation",
+      "definition": "semantic definition or enrichment suggestion"
     }
   ]
 }
 
+Rules for definition (all definitions will be merged with existing term definitions):
+- create_new: REQUIRED - Provide a concise semantic definition based on candidate's description.
+- alias_existing: OPTIONAL - Provide supplementary info to enrich the existing term's definition.
+- merge_existing: OPTIONAL - Provide a summary of the candidate's semantics to enrich the target term.
+- exclude_non_runtime: NOT NEEDED - Excluded terms do not enter the vocabulary.
+
 The candidates come from one Skill's combined inputs and outputs. Use that
-shared context to choose consistent semantic names. The type field is only the
-data representation, not the semantic role.
+shared context to choose consistent semantic names. Existing terms have definitions
+in the vocabulary context - use them to judge semantic equivalence. The type field
+is only the data representation, not the semantic role.
 """

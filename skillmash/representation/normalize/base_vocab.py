@@ -43,6 +43,29 @@ def term_similarity(left: str, right: str) -> float:
     return max(overlap, ratio)
 
 
+def _merge_definitions(existing: str, incoming: str) -> str:
+    """Merge two definitions, avoiding duplication.
+
+    If the incoming definition is already contained in the existing one,
+    return the existing definition unchanged. Otherwise, append the
+    incoming definition with a separator.
+    """
+    existing = existing.strip()
+    incoming = incoming.strip()
+    if not incoming:
+        return existing
+    if not existing:
+        return incoming
+    # Check if incoming is already contained (case-insensitive)
+    if incoming.lower() in existing.lower():
+        return existing
+    # Avoid duplication of similar content
+    if existing.lower() == incoming.lower():
+        return existing
+    # Append with separator
+    return f"{existing}; {incoming}"
+
+
 @dataclass(frozen=True)
 class BaseCandidate:
     """Base class for vocabulary resolution candidates."""
@@ -72,6 +95,7 @@ class BaseResolution:
     confidence: float
     reason: str = ""
     forced_merge: bool = False
+    definition: str = ""
 
 
 class BaseResolver(Protocol):
@@ -124,8 +148,135 @@ class BaseVocabTerm:
         )
 
 
-class BaseVocabulary:
-    """Thread-safe mutable bounded vocabulary for semantic fields."""
+class BaseVocabulary(Protocol):
+    """Protocol defining the common interface for all vocabularies.
+
+    Both static and dynamic vocabularies implement this interface,
+    allowing consistent usage across different vocabulary types.
+    """
+
+    version: str
+
+    def lookup(self, token: str) -> Optional[str]:
+        """Look up a token in the vocabulary, returning the canonical term."""
+        ...
+
+    def term_names(self) -> List[str]:
+        """Return sorted list of canonical term names."""
+        ...
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize vocabulary to a dictionary."""
+        ...
+
+    def save(self, path: Union[Path, str]) -> None:
+        """Save vocabulary to a JSON file."""
+        ...
+
+
+@dataclass(frozen=True)
+class StaticVocabulary:
+    """Immutable vocabulary with fixed terms and alias mappings.
+
+    Suitable for controlled vocabularies that don't need dynamic growth,
+    such as DataType vocabulary with predefined formats/carriers.
+    """
+
+    version: str
+    vocab: frozenset
+    aliases: Dict[str, str] = field(default_factory=dict)
+
+    def lookup(self, token: str) -> Optional[str]:
+        """Look up a token, returning the canonical term if found."""
+        if token in self.vocab:
+            return token
+        return self.aliases.get(token)
+
+    def resolve(self, raw_token: str) -> str:
+        """Resolve a raw token to a canonical vocabulary term.
+
+        Returns the canonical term if found, otherwise returns "unknown"
+        (or the raw token if "unknown" is not in vocab).
+        """
+        normalized = raw_token.lower().strip()
+        # Direct match in vocab
+        if normalized in self.vocab:
+            return normalized
+        # Check aliases
+        alias_result = self.aliases.get(normalized)
+        if alias_result and alias_result in self.vocab:
+            return alias_result
+        # Fallback to "unknown" if available
+        if "unknown" in self.vocab:
+            return "unknown"
+        return normalized
+
+    def term_names(self) -> List[str]:
+        """Return sorted list of canonical term names."""
+        return sorted(self.vocab)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize vocabulary to a dictionary."""
+        return {
+            "version": self.version,
+            "vocab": sorted(self.vocab),
+            "aliases": dict(self.aliases),
+        }
+
+    def save(self, path: Union[Path, str]) -> None:
+        """Save vocabulary to a JSON file."""
+        Path(path).write_text(
+            json.dumps(self.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Dict[str, Any],
+        *,
+        default_version: str = "static-vocab-v1",
+    ) -> "StaticVocabulary":
+        """Build vocabulary from a dictionary."""
+        vocab_data = data.get("vocab", [])
+        vocab = frozenset(
+            str(item).strip()
+            for item in vocab_data
+            if str(item).strip()
+        )
+        aliases = {
+            str(k).strip(): str(v).strip()
+            for k, v in data.get("aliases", {}).items()
+            if str(k).strip() and str(v).strip()
+        }
+        return cls(
+            version=str(data.get("version") or default_version),
+            vocab=vocab,
+            aliases=aliases,
+        )
+
+    @classmethod
+    def load(
+        cls,
+        path: Union[Path, str],
+        *,
+        default_version: str = "static-vocab-v1",
+    ) -> "StaticVocabulary":
+        """Load vocabulary from a JSON file."""
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return cls.from_dict(data, default_version=default_version)
+
+    def __contains__(self, token: str) -> bool:
+        """Check if a token is in the vocabulary (canonical or alias)."""
+        return token in self.vocab or token in self.aliases
+
+
+class DynamicVocabulary:
+    """Thread-safe mutable bounded vocabulary for semantic fields.
+
+    Suitable for vocabularies that need to grow dynamically based on
+    observed data, such as I/O name vocabulary.
+    """
 
     def __init__(
         self,
@@ -149,7 +300,7 @@ class BaseVocabulary:
         version: str,
         max_vocab_size: Optional[int],
         aliases: Dict[str, str],
-    ) -> "BaseVocabulary":
+    ) -> "DynamicVocabulary":
         """Build vocabulary from an alias mapping."""
         terms: Dict[str, BaseVocabTerm] = {}
         for alias, name in aliases.items():
@@ -170,7 +321,7 @@ class BaseVocabulary:
         *,
         default_version: str,
         default_max_vocab_size: Optional[int],
-    ) -> "BaseVocabulary":
+    ) -> "DynamicVocabulary":
         return cls(
             version=str(data.get("version") or default_version),
             max_vocab_size=_max_vocab_size_from_data(
@@ -191,7 +342,7 @@ class BaseVocabulary:
         *,
         default_version: str,
         default_max_vocab_size: Optional[int],
-    ) -> "BaseVocabulary":
+    ) -> "DynamicVocabulary":
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls.from_dict(
             data,
@@ -219,6 +370,10 @@ class BaseVocabulary:
         with self._lock:
             return self._aliases.get(token)
 
+    def term_names(self) -> List[str]:
+        with self._lock:
+            return sorted(self._terms)
+
     def size(self) -> int:
         with self._lock:
             return len(self._terms)
@@ -226,11 +381,14 @@ class BaseVocabulary:
     def is_full(self) -> bool:
         return self.max_vocab_size is not None and self.size() >= self.max_vocab_size
 
-    def term_names(self) -> List[str]:
-        with self._lock:
-            return sorted(self._terms)
-
-    def add_alias(self, alias: str, target: str, *, example: str = "") -> None:
+    def add_alias(
+        self,
+        alias: str,
+        target: str,
+        *,
+        example: str = "",
+        definition: str = "",
+    ) -> None:
         with self._lock:
             term = self._terms.get(target)
             if term is None:
@@ -240,9 +398,18 @@ class BaseVocabulary:
                 self._aliases[alias] = target
             if example and example not in term.examples:
                 term.examples.append(example)
+            if definition:
+                term.definition = _merge_definitions(term.definition, definition)
             term.count += 1
 
-    def create_term(self, name: str, *, alias: str = "", example: str = "") -> str:
+    def create_term(
+        self,
+        name: str,
+        *,
+        alias: str = "",
+        example: str = "",
+        definition: str = "",
+    ) -> str:
         with self._lock:
             if (
                 self.max_vocab_size is not None
@@ -252,7 +419,7 @@ class BaseVocabulary:
                 return self.closest_term(name) or name
             term = self._terms.get(name)
             if term is None:
-                term = BaseVocabTerm(name=name)
+                term = BaseVocabTerm(name=name, definition=definition)
                 self._terms[name] = term
                 self._aliases[name] = name
             if alias and alias != name:
@@ -314,7 +481,7 @@ class HeuristicBaseResolver:
         self,
         token: str,
         description: str,
-        vocabulary: BaseVocabulary,
+        vocabulary: DynamicVocabulary,
     ) -> BaseResolution:
         """Common resolution logic for heuristic resolvers."""
         if self.is_non_runtime(token, description):
@@ -343,7 +510,7 @@ class HeuristicBaseResolver:
     def resolve_many_base(
         self,
         candidates: List[Any],
-        vocabulary: BaseVocabulary,
+        vocabulary: DynamicVocabulary,
     ) -> Dict[str, BaseResolution]:
         """Resolve a batch locally while preserving one resolution per token."""
         resolutions: Dict[str, BaseResolution] = {}
@@ -357,6 +524,11 @@ class HeuristicBaseResolver:
                 vocabulary=vocabulary,
             )
         return resolutions
+
+
+# Backward compatibility alias: BaseVocabulary was previously the dynamic class.
+# Now BaseVocabulary is a Protocol, but we keep this alias for gradual migration.
+BaseVocabularyImpl = DynamicVocabulary
 
 
 def _normalize_max_vocab_size(value: Optional[int]) -> Optional[int]:

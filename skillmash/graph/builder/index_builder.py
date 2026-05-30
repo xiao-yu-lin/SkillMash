@@ -143,4 +143,3 @@ def _skill_terms(skill) -> Set[str]:
 
 def _tokenize(text: str) -> Set[str]:
     return _GRAPH_TERM_LEXICON.tokenize(text)
-

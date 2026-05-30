@@ -12,7 +12,10 @@ interfaces between stages.
   artifacts.
 - `skillmash/graph/`: builds a registry, deterministic relation candidates,
   LLM-backed relation matches, Skill graph artifacts, and lookup indexes from
-  normalized representations.
+  normalized representations. Organized into subdirectories:
+  - `candidates/`: deterministic relation candidate generation.
+  - `matcher/`: LLM-backed ontology matching and relation resolution.
+  - `builder/`: graph node/edge construction and index building.
 - `skillmash/orchestration/`: loads graph build artifacts and creates candidate
   execution plans from a user query, grounded artifacts, and `can_feed` edges.
 - `skillmash/reranking/`: reranks existing orchestration candidates with an

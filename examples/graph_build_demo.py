@@ -19,9 +19,10 @@ import argparse
 import json
 import logging
 import sys
+import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 try:
     from rich.console import Console
@@ -56,80 +57,263 @@ from skillmash.representation import (  # noqa: E402
 )
 
 
-class ConsoleProgress:
-    """Render graph build progress with Rich."""
+class GraphProgress:
+    """Render graph build progress with Rich.
 
-    def __init__(self) -> None:
+    Follows the same style as representation_extraction_demo.RichProgress.
+    """
+
+    # Weight for each stage in overall progress (should sum to 100)
+    STAGE_WEIGHTS = {
+        "load": 10,
+        "candidates": 20,
+        "llm_matching": 50,
+        "graph_build": 15,
+        "write": 5,
+    }
+
+    def __init__(self, logger: logging.Logger) -> None:
+        self.logger = logger
         self.started_at = time.monotonic()
         self.console = Console(stderr=True)
-        self.progress = None
-        self.task_id = None
-        self.accepted_count = 0
+        self.progress: Optional[Progress] = None
+        self.main_task_id = None
+        self.lock = threading.Lock()
+        self.closed = False
+
+        # Stage counters
+        self.total = 0
+        self.last_stage = "init"
+        self.last_item = ""
+        self.last_current = 0
+        # LLM matching stats
+        self.llm_total = 0
+        self.llm_current = 0
         self.match_count = 0
+        self.accepted_count = 0
         self.diagnostics_count = 0
+        self.candidate_count = 0
 
-    def log(self, message: str) -> None:
+    def __call__(
+        self,
+        stage: str,
+        current: int,
+        total: int,
+        item: str,
+        details: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Main progress callback for non-LLM stages."""
+        self.logger.info(
+            "stage=%s current=%s total=%s item=%s",
+            stage,
+            current,
+            total,
+            item,
+        )
+        with self.lock:
+            self._ensure_started(max(1, total))
+            self.total = max(self.total, total)
+            self.last_stage = stage
+            self.last_item = item
+            self.last_current = current
+
+            if stage == "load":
+                pass  # Just tracking
+            elif stage == "candidates":
+                self.candidate_count = current
+            elif stage == "graph_build":
+                pass  # Just tracking
+            elif stage == "write":
+                pass  # Just tracking
+            elif stage == "done":
+                self._close_locked()
+                return
+
+            if self.progress is not None and self.main_task_id is not None:
+                self.progress.update(
+                    self.main_task_id,
+                    completed=self._calculate_weighted_progress(),
+                    total=100,
+                    status=self._main_status_line(),
+                )
+
+    def llm(
+        self,
+        event: str,
+        current: int,
+        total: int,
+        details: dict[str, Any],
+    ) -> None:
+        """LLM matching progress callback."""
+        self.logger.info(
+            "stage=llm_matching event=%s current=%s total=%s details=%s",
+            event,
+            current,
+            total,
+            details,
+        )
+        with self.lock:
+            self._ensure_started(max(1, total))
+
+            if event == "matching_start":
+                self.llm_total = total
+                self.llm_current = 0
+                self.match_count = 0
+                self.accepted_count = 0
+                self.diagnostics_count = 0
+                self.last_stage = "llm_matching"
+                self.candidate_count = details.get("candidate_count", 0)
+            elif event == "batch_start":
+                self.llm_current = current
+                self.last_item = f"batch {current}/{total}"
+            elif event == "batch_done":
+                self.llm_current = current
+                self.match_count += int(details.get("match_count", 0))
+                self.accepted_count += int(details.get("accepted_count", 0))
+                self.diagnostics_count += int(details.get("diagnostics_count", 0))
+            elif event == "matching_done":
+                self.llm_current = total
+                self.match_count = int(details.get("match_count", 0))
+                self.accepted_count = int(details.get("accepted_count", 0))
+                self.diagnostics_count = int(details.get("diagnostics_count", 0))
+
+            if self.progress is not None and self.main_task_id is not None:
+                self.progress.update(
+                    self.main_task_id,
+                    completed=self._calculate_weighted_progress(),
+                    total=100,
+                    status=self._main_status_line(),
+                )
+
+    def close(self) -> None:
+        with self.lock:
+            self._close_locked()
+
+    def _ensure_started(self, total: int) -> None:
+        if self.progress is not None:
+            return
+        self.progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold cyan]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            TextColumn("{task.fields[status]}"),
+            console=self.console,
+            transient=False,
+        )
+        self.progress.start()
+        self.main_task_id = self.progress.add_task(
+            "Graph build",
+            total=100,
+            status=self._main_status_line(),
+        )
+
+    def _calculate_weighted_progress(self) -> int:
+        """Calculate weighted progress percentage based on stage completion."""
+        weights = self.STAGE_WEIGHTS
+
+        # Each stage contributes its weight when complete
+        load_progress = weights.get("load", 0) if self.last_stage not in ("init",) else 0
+        candidates_progress = (
+            (self.candidate_count / max(1, self.total) * weights.get("candidates", 0))
+            if self.candidate_count > 0
+            else 0
+        )
+        llm_progress = (
+            (self.llm_current / max(1, self.llm_total) * weights.get("llm_matching", 0))
+            if self.llm_total > 0
+            else 0
+        )
+
+        return int(load_progress + candidates_progress + llm_progress)
+
+    def _main_status_line(self) -> str:
+        """Generate single-line status for main progress bar."""
+        stage = self._stage_label(self.last_stage)
+        item = self._short_item(self.last_item)
+        current = self.last_current
+
+        parts = [f"→ [{stage}]"]
+        if item:
+            parts.append(f"{item}")
+        if self.llm_total > 0:
+            parts.append(
+                f"llm {self.llm_current}/{self.llm_total} "
+                f"matches={self.match_count} accepted={self.accepted_count}"
+            )
+        elif self.candidate_count > 0:
+            parts.append(f"candidates={self.candidate_count}")
+
+        return " ".join(parts)
+
+    def _close_locked(self) -> None:
+        if self.closed:
+            return
+        if self.progress is not None:
+            self.progress.stop()
+            self.progress = None
+            self.main_task_id = None
         elapsed = time.monotonic() - self.started_at
-        self.console.log(f"[graph-build +{elapsed:6.1f}s] {message}")
+        self.console.log(
+            "[graph-build] progress finished: "
+            f"elapsed={elapsed:.1f}s "
+            f"candidates={self.candidate_count} "
+            f"llm_batches={self.llm_current}/{self.llm_total} "
+            f"matches={self.match_count} "
+            f"accepted={self.accepted_count} "
+            f"diagnostics={self.diagnostics_count}"
+        )
+        self.closed = True
 
-    def llm(self, event: str, current: int, total: int, details: dict[str, Any]) -> None:
-        if event == "matching_start":
-            message = (
-                f"candidates={details.get('candidate_count', 0)} "
-                f"batch_size={details.get('batch_size', 0)} "
-                f"workers={details.get('max_workers', 1)} "
-                f"consensus_runs={details.get('consensus_runs', 1)}"
-            )
-            self.accepted_count = 0
-            self.match_count = 0
-            self.diagnostics_count = 0
-            self.progress = Progress(
-                SpinnerColumn(),
-                TextColumn("[bold cyan]{task.description}"),
-                BarColumn(),
-                TaskProgressColumn(),
-                TimeElapsedColumn(),
-                TextColumn("{task.fields[status]}"),
-                console=self.console,
-                transient=False,
-            )
-            self.progress.start()
-            self.task_id = self.progress.add_task(
-                "LLM batches",
-                total=total,
-                status=message,
-            )
-        elif event == "batch_start":
-            if self.progress is not None and self.task_id is not None:
-                self.progress.update(
-                    self.task_id,
-                    status=f"running {current}/{total}",
-                )
-        elif event == "batch_done":
-            self.match_count += int(details.get("match_count", 0))
-            self.accepted_count += int(details.get("accepted_count", 0))
-            self.diagnostics_count += int(details.get("diagnostics_count", 0))
-            if self.progress is not None and self.task_id is not None:
-                self.progress.update(
-                    self.task_id,
-                    advance=1,
-                    status=(
-                        f"matches={self.match_count} "
-                        f"accepted={self.accepted_count} "
-                        f"diag={self.diagnostics_count}"
-                    ),
-                )
-        elif event == "matching_done":
-            if self.progress is not None:
-                self.progress.stop()
-                self.progress = None
-                self.task_id = None
-            self.log(
-                "llm matching done: "
-                f"matches={details.get('match_count', 0)} "
-                f"accepted={details.get('accepted_count', 0)} "
-                f"diagnostics={details.get('diagnostics_count', 0)}"
-            )
+    def _stage_label(self, stage: str) -> str:
+        labels = {
+            "init": "init",
+            "load": "load",
+            "candidates": "candidates",
+            "llm_matching": "llm_match",
+            "graph_build": "build",
+            "write": "write",
+            "done": "done",
+        }
+        return labels.get(stage, stage)
+
+    def _short_item(self, item: str) -> str:
+        if not item:
+            return ""
+        # Truncate long items
+        if len(item) > 40:
+            return item[:37] + "..."
+        return item
+
+
+def configure_logging(out_dir: Path) -> logging.Logger:
+    """Configure logging for graph build demo.
+
+    Logs are written to both file and stderr console.
+    """
+    logger = logging.getLogger("skillmash.graph.example")
+    logger.setLevel(logging.DEBUG)
+    logger.handlers.clear()
+    logger.propagate = False
+
+    formatter = logging.Formatter(
+        fmt="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+    # File handler for persistent log
+    file_handler = logging.FileHandler(out_dir / "graph_build.log", encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(logging.DEBUG)
+    logger.addHandler(file_handler)
+
+    # Console handler for stderr
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(logging.INFO)
+    logger.addHandler(console_handler)
+
+    return logger
 
 
 def main() -> None:
@@ -198,24 +382,40 @@ def main() -> None:
 
     representations_json = Path(representations_arg).resolve()
     out_dir = Path(out_dir_arg).resolve()
-    progress = ConsoleProgress()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    logger = configure_logging(out_dir)
+    logger.info("starting graph build")
+    logger.info("representations_json=%s", representations_json)
+    logger.info("out_dir=%s", out_dir)
+    logger.info("batch_size=%s workers=%s", args.batch_size, args.workers)
+    logger.info(
+        "consensus=%s can_feed_threshold=%s",
+        not args.no_consensus,
+        args.can_feed_threshold,
+    )
+
     if args.debug_candidates:
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format="%(levelname)s:%(name)s:%(message)s",
-        )
         logging.getLogger("skillmash.graph.candidates").setLevel(logging.DEBUG)
 
-    progress.log(f"loading representations: {representations_json}")
+    progress = GraphProgress(logger)
+
+    progress("load", 0, 0, str(representations_json))
+    progress("load", 1, 1, str(representations_json))
+    logger.info("loading representations: %s", representations_json)
     representations = _load_representations(representations_json)
-    progress.log(f"loaded representations: count={len(representations)}")
-    progress.log("loading LLM config from .env/environment")
+    logger.info("loaded representations: count=%s", len(representations))
+    progress("load", 1, 1, f"loaded {len(representations)} representations")
+
+    logger.info("loading LLM config from .env/environment")
     llm_config = LLMConfig.from_env(REPO_ROOT / ".env")
-    progress.log(
-        "LLM config loaded: "
-        f"model={llm_config.model} base_url={llm_config.base_url} "
-        f"temperature={llm_config.temperature}"
+    logger.info(
+        "LLM config loaded: model=%s base_url=%s temperature=%s",
+        llm_config.model,
+        llm_config.base_url,
+        llm_config.temperature,
     )
+
     matcher = OpenAICompatibleOntologyMatcher(
         llm_config,
         batch_size=max(1, args.batch_size),
@@ -226,18 +426,25 @@ def main() -> None:
         },
         progress=progress.llm,
     )
-    progress.log("building graph artifacts")
+
+    logger.info("building graph artifacts")
     result = GraphBuilder(matcher=matcher).build(representations)
-    progress.log(
-        "graph build complete: "
-        f"candidates={len(result.candidates)} "
-        f"matches={len(result.llm_matches)} "
-        f"accepted={len([match for match in result.llm_matches if match.accepted])} "
-        f"diagnostics={len(result.diagnostics)}"
+    logger.info(
+        "graph build complete: candidates=%s matches=%s accepted=%s diagnostics=%s",
+        len(result.candidates),
+        len(result.llm_matches),
+        len([match for match in result.llm_matches if match.accepted]),
+        len(result.diagnostics),
     )
-    progress.log(f"writing artifacts: {out_dir}")
+
+    progress("write", 0, 1, str(out_dir))
+    logger.info("writing artifacts: %s", out_dir)
     write_graph_build_result(result, out_dir)
-    progress.log("artifacts written")
+    progress("write", 1, 1, str(out_dir))
+    logger.info("artifacts written")
+
+    progress("done", 1, 1, "complete")
+    progress.close()
 
     print(
         json.dumps(

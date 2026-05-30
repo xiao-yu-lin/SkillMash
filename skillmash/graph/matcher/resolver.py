@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from skillmash.graph.matcher import OntologyMatcher
+from skillmash.graph.matcher.matcher import OntologyMatcher
 from skillmash.graph.models import GraphDiagnostic, LLMMatch, RelationCandidate, SkillRegistry
 
 

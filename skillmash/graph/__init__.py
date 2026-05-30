@@ -1,12 +1,12 @@
 """Offline Skill graph construction."""
 
-from skillmash.graph.builder import SkillGraphBuilder
+from skillmash.graph.builder import SkillGraphBuilder, SkillIndexBuilder
 from skillmash.graph.candidates import CandidateGenerator
-from skillmash.graph.index import SkillIndexBuilder
 from skillmash.graph.matcher import (
     DEFAULT_THRESHOLDS,
-    OpenAICompatibleOntologyMatcher,
     OntologyMatcher,
+    OpenAICompatibleOntologyMatcher,
+    RelationResolver,
     validate_llm_matches,
 )
 from skillmash.graph.models import (
@@ -23,7 +23,6 @@ from skillmash.graph.models import (
     SkillRegistry,
 )
 from skillmash.graph.pipeline import GraphBuilder
-from skillmash.graph.relation_resolution import RelationResolver
 from skillmash.graph.registry import SkillRegistryBuilder
 from skillmash.graph.writer import write_graph_build_result, write_json_file
 

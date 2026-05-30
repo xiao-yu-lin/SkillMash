@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Iterable, Optional
 
-from skillmash.graph.builder import SkillGraphBuilder
+from skillmash.graph.builder import SkillGraphBuilder, SkillIndexBuilder
 from skillmash.graph.candidates import CandidateGenerator
-from skillmash.graph.index import SkillIndexBuilder
-from skillmash.graph.matcher import DEFAULT_THRESHOLDS, OntologyMatcher
+from skillmash.graph.matcher import DEFAULT_THRESHOLDS, OntologyMatcher, RelationResolver
 from skillmash.graph.models import BuildManifest, GraphBuildResult, GraphDiagnostic
-from skillmash.graph.relation_resolution import RelationResolver
 from skillmash.graph.registry import SkillRegistryBuilder
+from skillmash.representation.models import SkillRepresentation
 
 class GraphBuilder:
     """Build Skill graph artifacts from normalized Skill representations."""

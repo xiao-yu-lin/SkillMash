@@ -8,7 +8,7 @@ shared base vocabulary infrastructure from base_vocab.py.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 from typing import Any, Callable, Dict, List, Optional, Set, Union
@@ -50,46 +50,14 @@ IONameResolution = BaseResolution
 # IONameResolver protocol is identical to BaseResolver, use it as alias.
 IONameResolver = BaseResolver
 
-
-@dataclass
-class IONameVocabTerm(BaseVocabTerm):
-    """I/O name vocabulary term with allowed types constraint."""
-
-    allowed_types: Set[str] = field(default_factory=set)
-
-    def to_dict(self) -> Dict[str, Any]:
-        data = super().to_dict()
-        data["allowed_types"] = sorted(self.allowed_types)
-        return data
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "IONameVocabTerm":
-        name = str(data.get("name") or "").strip()
-        aliases = {
-            str(alias).strip()
-            for alias in data.get("aliases", [])
-            if str(alias).strip()
-        }
-        allowed_types = {
-            str(item).strip()
-            for item in data.get("allowed_types", [])
-            if str(item).strip()
-        }
-        return cls(
-            name=name,
-            aliases=aliases,
-            definition=str(data.get("definition") or ""),
-            allowed_types=allowed_types,
-            examples=[str(item) for item in data.get("examples", [])],
-            count=int(data.get("count") or 0),
-        )
+# IONameVocabTerm is identical to BaseVocabTerm, use it as alias.
+IONameVocabTerm = BaseVocabTerm
 
 
 class IONameVocabulary:
     """Mutable io_name_vocab with bounded canonical terms and unbounded aliases.
 
     This vocabulary manages I/O name terms used for graph linking.
-    Unlike BaseVocabulary, it supports allowed_types constraints.
     """
 
     def __init__(
@@ -185,7 +153,6 @@ class IONameVocabulary:
         alias: str,
         target: str,
         *,
-        data_type: str = "",
         example: str = "",
     ) -> None:
         with self._lock:
@@ -195,8 +162,6 @@ class IONameVocabulary:
             if alias and alias != target:
                 term.aliases.add(alias)
                 self._aliases[alias] = target
-            if data_type:
-                term.allowed_types.add(data_type)
             if example and example not in term.examples:
                 term.examples.append(example)
             term.count += 1
@@ -206,7 +171,6 @@ class IONameVocabulary:
         name: str,
         *,
         alias: str = "",
-        data_type: str = "",
         example: str = "",
     ) -> str:
         with self._lock:
@@ -224,8 +188,6 @@ class IONameVocabulary:
             if alias and alias != name:
                 term.aliases.add(alias)
                 self._aliases[alias] = name
-            if data_type:
-                term.allowed_types.add(data_type)
             if example:
                 term.examples.append(example)
             term.count += 1

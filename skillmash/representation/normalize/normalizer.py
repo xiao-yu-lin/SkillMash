@@ -637,7 +637,6 @@ class SkillRepresentationNormalizer:
             return self.io_name_vocabulary.create_term(
                 resolution.normalized_value or token,
                 alias=token,
-                data_type=raw_type,
                 example=description,
             )
 
@@ -646,7 +645,6 @@ class SkillRepresentationNormalizer:
             return self.io_name_vocabulary.create_term(
                 token,
                 alias=token,
-                data_type=raw_type,
                 example=description,
             )
         if target not in self.io_name_vocabulary.term_names():
@@ -654,7 +652,6 @@ class SkillRepresentationNormalizer:
         self.io_name_vocabulary.add_alias(
             token,
             target,
-            data_type=raw_type,
             example=description,
         )
         return target

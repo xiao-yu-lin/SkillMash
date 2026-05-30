@@ -27,7 +27,7 @@ class LLMSchemaExtractor:
 
     def extract(self, manifest: RawSkillManifest) -> ExtractedSkillSchema:
         content = self.client.complete_json(
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=_SCHEMA_EXTRACTION_PROMPT,
             user_content=json.dumps(
                 _build_llm_context(manifest),
                 ensure_ascii=False,
@@ -51,7 +51,7 @@ class LLMSchemaExtractor:
         contents = self.client.complete_json_many(
             [
                 {
-                    "system_prompt": _SYSTEM_PROMPT,
+                    "system_prompt": _SCHEMA_EXTRACTION_PROMPT,
                     "user_content": json.dumps(
                         _build_llm_context(manifest),
                         ensure_ascii=False,
@@ -124,7 +124,7 @@ def _build_llm_context(manifest: RawSkillManifest) -> Dict[str, Any]:
         "body": manifest.body[:12000],
     }
 
-_SYSTEM_PROMPT = """You extract structured Skill IO representations from SKILL.md files.
+_SCHEMA_EXTRACTION_PROMPT = """You extract structured Skill IO representations from SKILL.md files.
 
 Return JSON only. Do not include markdown.
 

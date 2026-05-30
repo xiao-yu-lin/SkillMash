@@ -189,6 +189,16 @@ class NormalizationConfig:
     unknown_type: str = "unknown"
 
 @dataclass(frozen=True)
+class MetadataNormalizationResult:
+    """Result of metadata normalization: id, name, version, description."""
+
+    id: str
+    name: str
+    description: str
+    version: str
+
+
+@dataclass(frozen=True)
 class NormalizationDecision:
     """Trace record for a normalization choice kept outside representations."""
 

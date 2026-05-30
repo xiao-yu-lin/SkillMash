@@ -25,9 +25,12 @@ from skillmash.representation.normalize.io_name_vocab import (
     IONameVocabulary,
     LLMIONameResolver,
 )
+from skillmash.representation.normalize.metadata_normalizer import MetadataNormalizer
 from skillmash.representation.normalize.normalizer import SkillRepresentationNormalizer
 
 __all__ = [
+    # Metadata normalization
+    "MetadataNormalizer",
     # Base vocabulary
     "BaseCandidate",
     "BaseResolution",

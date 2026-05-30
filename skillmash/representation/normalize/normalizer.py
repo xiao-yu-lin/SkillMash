@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from threading import RLock
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from skillmash.representation.normalize.base_vocab import term_similarity
 from skillmash.representation.normalize.data_type_vocab import DataTypeVocabulary
+from skillmash.representation.normalize.metadata_normalizer import MetadataNormalizer
 from skillmash.representation.normalize.io_name_vocab import (
     HeuristicIONameResolver,
     IONameCandidate,
@@ -19,6 +19,7 @@ from skillmash.representation.models import (
     ArtifactSpec,
     ExtractedSkillSchema,
     ExtractionDiagnostic,
+    MetadataNormalizationResult,
     NormalizationConfig,
     NormalizationDecision,
     NormalizationResult,
@@ -27,20 +28,10 @@ from skillmash.representation.models import (
     SkillRepresentation,
 )
 from skillmash.representation.utils import (
-    normalize_human_name,
     normalize_parameter_name,
-    normalize_slug,
     normalize_token,
     to_dict,
 )
-
-
-@dataclass(frozen=True)
-class _Identity:
-    id: str
-    name: str
-    description: str
-    version: str
 
 
 class SkillRepresentationNormalizer:
@@ -51,6 +42,7 @@ class SkillRepresentationNormalizer:
         config: Optional[NormalizationConfig] = None,
         io_name_vocabulary: Optional[IONameVocabulary] = None,
         io_name_resolver: Optional[IONameResolver] = None,
+        metadata_normalizer: Optional[MetadataNormalizer] = None,
     ) -> None:
         self.config = config or NormalizationConfig()
         self.data_type_vocabulary = DataTypeVocabulary.from_config(self.config)
@@ -59,6 +51,7 @@ class SkillRepresentationNormalizer:
             or IONameVocabulary.from_config(self.config)
         )
         self.io_name_resolver = io_name_resolver or HeuristicIONameResolver()
+        self.metadata_normalizer = metadata_normalizer or MetadataNormalizer(self.config)
         self._io_name_resolution_cache: Dict[str, IONameResolution] = {}
         self._io_name_resolution_cache_lock = RLock()
 
@@ -106,22 +99,9 @@ class SkillRepresentationNormalizer:
         self,
         manifest: RawSkillManifest,
         extracted: ExtractedSkillSchema,
-    ) -> _Identity:
-        frontmatter = manifest.frontmatter
-        raw_name = str(frontmatter.get("name") or manifest.folder.id_hint)
-        skill_id = normalize_slug(raw_name) or normalize_slug(manifest.folder.relative_path)
-        name = normalize_human_name(raw_name) or skill_id
-        version = str(
-            frontmatter.get("version")
-            or self.config.default_version
-        )
-        description = str(extracted.description or frontmatter.get("description") or "").strip()
-        return _Identity(
-            id=skill_id,
-            name=name,
-            description=description,
-            version=version,
-        )
+    ) -> MetadataNormalizationResult:
+        """Delegate metadata normalization to MetadataNormalizer."""
+        return self.metadata_normalizer.normalize(manifest, extracted)
 
     def _prime_io_name_resolutions(
         self,

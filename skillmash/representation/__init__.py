@@ -40,6 +40,8 @@ from skillmash.representation.extract import (
 
 # Stage: normalize
 from skillmash.representation.normalize import (
+    # Metadata normalization
+    MetadataNormalizer,
     # Base vocabulary
     BaseCandidate,
     BaseResolution,
@@ -76,6 +78,7 @@ from skillmash.common.llm import LLMConfig
 __all__ = [
     # Models
     "ArtifactSpec",
+    "MetadataNormalizer",
     "ExtractedSkillSchema",
     "ExtractionDiagnostic",
     "NormalizationConfig",

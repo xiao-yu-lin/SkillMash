@@ -17,8 +17,8 @@ from skillmash.representation.models import (
 )
 
 
-class OpenAICompatibleSchemaExtractor:
-    """Extract Skill IO schema through an OpenAI-compatible chat endpoint."""
+class LLMSchemaExtractor:
+    """Extract Skill IO schema using LLM."""
 
     def __init__(self, config: LLMConfig) -> None:
         self.config = config

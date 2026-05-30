@@ -274,7 +274,7 @@ typed DAG 计划结构放在“下一步计划”中说明。
 ```text
 SkillFolderScanner
   -> SkillManifestParser
-  -> OpenAICompatibleSchemaExtractor
+  -> LLMSchemaExtractor
   -> SkillRepresentationNormalizer
   -> write_extraction_result
 ```

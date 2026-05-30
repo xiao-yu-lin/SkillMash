@@ -286,7 +286,7 @@ class HeuristicIONameResolver(HeuristicBaseResolver):
         return self.resolve_many_base(candidates, vocabulary)
 
 
-class OpenAICompatibleIONameResolver:
+class LLMIONameResolver:
     """LLM-backed resolver for unseen io_name_vocab terms."""
 
     def __init__(

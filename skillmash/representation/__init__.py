@@ -11,7 +11,7 @@ from skillmash.representation.base_vocab import (
     term_similarity,
 )
 from skillmash.representation.extractor import (
-    OpenAICompatibleSchemaExtractor,
+    LLMSchemaExtractor,
     schema_from_llm_payload,
 )
 from skillmash.representation.io_name_vocab import (
@@ -21,7 +21,7 @@ from skillmash.representation.io_name_vocab import (
     IONameResolver,
     IONameVocabTerm,
     IONameVocabulary,
-    OpenAICompatibleIONameResolver,
+    LLMIONameResolver,
 )
 from skillmash.common.llm import LLMConfig
 from skillmash.representation.manifest import SkillManifestParser
@@ -71,7 +71,7 @@ __all__ = [
     "IONameResolver",
     "IONameVocabTerm",
     "IONameVocabulary",
-    "OpenAICompatibleIONameResolver",
+    "LLMIONameResolver",
     # Semantic vocabulary
     "HeuristicSemanticResolver",
     "SemanticCandidate",
@@ -92,7 +92,7 @@ __all__ = [
     "SkillFolder",
     "SkillRepresentation",
     # Extractor
-    "OpenAICompatibleSchemaExtractor",
+    "LLMSchemaExtractor",
     "schema_from_llm_payload",
     # LLM
     "LLMConfig",

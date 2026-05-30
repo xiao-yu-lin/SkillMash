@@ -54,8 +54,8 @@ from skillmash.representation import (  # noqa: E402
     IONameVocabulary,
     LLMConfig,
     NormalizationConfig,
-    OpenAICompatibleSchemaExtractor,
-    OpenAICompatibleIONameResolver,
+    LLMSchemaExtractor,
+    LLMIONameResolver,
     RepresentationExtractor,
     SkillRepresentationNormalizer,
     write_extraction_result,
@@ -360,13 +360,13 @@ def main() -> None:
     io_name_resolver = (
         HeuristicIONameResolver()
         if args.heuristic_vocab_resolver
-        else OpenAICompatibleIONameResolver(
+        else LLMIONameResolver(
             llm_config,
             progress=progress.vocab,
         )
     )
     extractor = RepresentationExtractor(
-        OpenAICompatibleSchemaExtractor(llm_config),
+        LLMSchemaExtractor(llm_config),
         normalizer=SkillRepresentationNormalizer(
             config=normalization_config,
             io_name_vocabulary=IONameVocabulary.from_config(normalization_config),

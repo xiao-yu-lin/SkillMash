@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Union
 
-from skillmash.representation.manifest import SkillManifestParser
+from skillmash.representation.parse import SkillManifestParser
 from skillmash.representation.models import (
     ExtractedSkillSchema,
     ExtractionDiagnostic,
@@ -15,8 +15,8 @@ from skillmash.representation.models import (
     RepresentationExtractionResult,
     SkillSchemaExtractor,
 )
-from skillmash.representation.normalizer import SkillRepresentationNormalizer
-from skillmash.representation.scanner import SkillFolderScanner
+from skillmash.representation.normalize import SkillRepresentationNormalizer
+from skillmash.representation.scan import SkillFolderScanner
 
 ProgressCallback = Callable[[str, int, int, str], None]
 

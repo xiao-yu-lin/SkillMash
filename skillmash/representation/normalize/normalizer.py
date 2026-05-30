@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from threading import RLock
 from typing import Any, Dict, List, Optional, Union
 
-from skillmash.representation.base_vocab import term_similarity
-from skillmash.representation.io_name_vocab import (
+from skillmash.representation.normalize.base_vocab import term_similarity
+from skillmash.representation.normalize.io_name_vocab import (
     HeuristicIONameResolver,
     IONameCandidate,
     IONameResolver,

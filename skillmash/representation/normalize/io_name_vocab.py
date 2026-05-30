@@ -13,7 +13,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Callable, Dict, List, Optional, Set, Union
 
-from skillmash.representation.base_vocab import (
+from skillmash.representation.normalize.base_vocab import (
     BaseCandidate,
     BaseResolution,
     BaseResolver,

@@ -216,24 +216,40 @@ The explicit `--basetemp` avoids Windows temp-directory permission issues seen i
 
 ## Structure
 
+The `representation` module follows the staged pipeline architecture from the design specification:
+
 ```text
 skillmash/
-  representation/
-    base_vocab.py    shared vocabulary infrastructure (base classes, constants, utilities)
-    models.py        representation data contracts
-    scanner.py       finds folders containing SKILL.md
-    manifest.py      parses SKILL.md frontmatter and body
-    extractor.py     OpenAI-compatible LLM schema extractor
-    io_name_vocab.py dynamic input/output name vocabulary (extends base_vocab)
-    semantic_vocab.py dynamic task/capability vocabulary (extends base_vocab)
+  common/
     llm.py           shared OpenAI-compatible client helpers
-    normalizer.py    deterministic schema normalization
-    pipeline.py      scan -> parse -> extract -> normalize orchestration
+  
+  representation/
+    models.py        representation data contracts (SkillRepresentation, ParameterSpec, etc.)
+    pipeline.py      scan -> parse -> extract -> normalize -> write orchestration
     utils.py         shared text normalization helpers
-    writer.py        writes extraction JSON artifacts
+    
+    scan/            Stage 1: Discover Skill folders containing SKILL.md
+      scanner.py     finds folders containing SKILL.md entrypoint
+    
+    parse/           Stage 2: Parse SKILL.md into frontmatter and body
+      parser.py      parses SKILL.md frontmatter and body
+    
+    extract/         Stage 3: LLM schema extraction from parsed content
+      extractor.py   OpenAI-compatible LLM schema extractor
+    
+    normalize/       Stage 4: Normalize I/O names, types, and identities
+      base_vocab.py      shared vocabulary infrastructure (base classes, constants, utilities)
+      io_name_vocab.py   dynamic input/output name vocabulary (extends base_vocab)
+      semantic_vocab.py  dynamic task/capability vocabulary (extends base_vocab)
+      normalizer.py      deterministic schema normalization
+    
+    write/           Stage 5: Write extraction artifacts to disk
+      writer.py      writes extraction JSON artifacts
 
 examples/
   representation_extraction_demo.py
+  graph_build_demo.py
+  graph_online_demo.py
 
 docs/
   skill-orchestration-system-design.md
@@ -246,6 +262,8 @@ docs/
 
 tests/
   test_representation.py
+  test_graph.py
+  test_orchestration_planner.py
 ```
 
 ## Design Notes

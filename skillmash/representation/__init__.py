@@ -1,30 +1,17 @@
-"""Skill representation extraction."""
+"""Skill representation extraction.
 
-from skillmash.representation.base_vocab import (
-    BaseCandidate,
-    BaseResolution,
-    BaseResolver,
-    BaseVocabTerm,
-    BaseVocabulary,
-    HeuristicBaseResolver,
-    NON_RUNTIME_HINTS,
-    term_similarity,
-)
-from skillmash.representation.extractor import (
-    LLMSchemaExtractor,
-    schema_from_llm_payload,
-)
-from skillmash.representation.io_name_vocab import (
-    HeuristicIONameResolver,
-    IONameCandidate,
-    IONameResolution,
-    IONameResolver,
-    IONameVocabTerm,
-    IONameVocabulary,
-    LLMIONameResolver,
-)
-from skillmash.common.llm import LLMConfig
-from skillmash.representation.manifest import SkillManifestParser
+This module provides a stage-based pipeline for extracting structured
+representations from Skill folders containing SKILL.md files.
+
+Stages:
+- scan: Discover Skill folders containing SKILL.md entrypoints
+- parse: Parse SKILL.md into frontmatter and body
+- extract: LLM schema extraction from parsed content
+- normalize: Normalize I/O names, types, and identities via vocabularies
+- write: Write extraction artifacts to disk
+"""
+
+# Models - core data contracts
 from skillmash.representation.models import (
     ArtifactSpec,
     ExtractedSkillSchema,
@@ -38,47 +25,62 @@ from skillmash.representation.models import (
     SkillFolder,
     SkillRepresentation,
 )
-from skillmash.representation.normalizer import SkillRepresentationNormalizer
-from skillmash.representation.pipeline import RepresentationExtractor
-from skillmash.representation.scanner import SkillFolderScanner
-from skillmash.representation.semantic_vocab import (
+
+# Stage: scan
+from skillmash.representation.scan import SkillFolderScanner
+
+# Stage: parse
+from skillmash.representation.parse import SkillManifestParser
+
+# Stage: extract
+from skillmash.representation.extract import (
+    LLMSchemaExtractor,
+    schema_from_llm_payload,
+)
+
+# Stage: normalize
+from skillmash.representation.normalize import (
+    # Base vocabulary
+    BaseCandidate,
+    BaseResolution,
+    BaseResolver,
+    BaseVocabTerm,
+    BaseVocabulary,
+    HeuristicBaseResolver,
+    NON_RUNTIME_HINTS,
+    term_similarity,
+    # I/O name vocabulary
+    HeuristicIONameResolver,
+    IONameCandidate,
+    IONameResolution,
+    IONameResolver,
+    IONameVocabTerm,
+    IONameVocabulary,
+    LLMIONameResolver,
+    # Semantic vocabulary
     HeuristicSemanticResolver,
     SemanticCandidate,
     SemanticResolution,
     SemanticResolver,
     SemanticVocabTerm,
     SemanticVocabulary,
+    # Normalizer
+    SkillRepresentationNormalizer,
 )
-from skillmash.representation.writer import (
+
+# Stage: write
+from skillmash.representation.write import (
     write_extraction_result,
     write_json_file,
 )
 
+# Pipeline
+from skillmash.representation.pipeline import RepresentationExtractor
+
+# LLM config
+from skillmash.common.llm import LLMConfig
+
 __all__ = [
-    # Base vocabulary infrastructure
-    "BaseCandidate",
-    "BaseResolution",
-    "BaseResolver",
-    "BaseVocabTerm",
-    "BaseVocabulary",
-    "HeuristicBaseResolver",
-    "NON_RUNTIME_HINTS",
-    "term_similarity",
-    # I/O name vocabulary
-    "HeuristicIONameResolver",
-    "IONameCandidate",
-    "IONameResolution",
-    "IONameResolver",
-    "IONameVocabTerm",
-    "IONameVocabulary",
-    "LLMIONameResolver",
-    # Semantic vocabulary
-    "HeuristicSemanticResolver",
-    "SemanticCandidate",
-    "SemanticResolution",
-    "SemanticResolver",
-    "SemanticVocabTerm",
-    "SemanticVocabulary",
     # Models
     "ArtifactSpec",
     "ExtractedSkillSchema",
@@ -91,17 +93,44 @@ __all__ = [
     "RepresentationExtractionResult",
     "SkillFolder",
     "SkillRepresentation",
-    # Extractor
+    # Stage: scan
+    "SkillFolderScanner",
+    # Stage: parse
+    "SkillManifestParser",
+    # Stage: extract
     "LLMSchemaExtractor",
     "schema_from_llm_payload",
-    # LLM
-    "LLMConfig",
-    # Pipeline components
-    "RepresentationExtractor",
-    "SkillFolderScanner",
-    "SkillManifestParser",
+    # Stage: normalize - base vocabulary
+    "BaseCandidate",
+    "BaseResolution",
+    "BaseResolver",
+    "BaseVocabTerm",
+    "BaseVocabulary",
+    "HeuristicBaseResolver",
+    "NON_RUNTIME_HINTS",
+    "term_similarity",
+    # Stage: normalize - I/O name vocabulary
+    "HeuristicIONameResolver",
+    "IONameCandidate",
+    "IONameResolution",
+    "IONameResolver",
+    "IONameVocabTerm",
+    "IONameVocabulary",
+    "LLMIONameResolver",
+    # Stage: normalize - semantic vocabulary
+    "HeuristicSemanticResolver",
+    "SemanticCandidate",
+    "SemanticResolution",
+    "SemanticResolver",
+    "SemanticVocabTerm",
+    "SemanticVocabulary",
+    # Stage: normalize - normalizer
     "SkillRepresentationNormalizer",
-    # Writer
+    # Stage: write
     "write_extraction_result",
     "write_json_file",
+    # Pipeline
+    "RepresentationExtractor",
+    # LLM config
+    "LLMConfig",
 ]

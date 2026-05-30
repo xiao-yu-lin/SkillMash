@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from skillmash.representation.base_vocab import (
+from skillmash.representation.normalize.base_vocab import (
     BaseCandidate,
     BaseResolution,
     BaseResolver,

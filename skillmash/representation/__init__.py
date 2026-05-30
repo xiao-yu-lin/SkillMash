@@ -57,13 +57,6 @@ from skillmash.representation.normalize import (
     IONameVocabTerm,
     IONameVocabulary,
     LLMIONameResolver,
-    # Semantic vocabulary
-    HeuristicSemanticResolver,
-    SemanticCandidate,
-    SemanticResolution,
-    SemanticResolver,
-    SemanticVocabTerm,
-    SemanticVocabulary,
     # Normalizer
     SkillRepresentationNormalizer,
 )
@@ -117,13 +110,6 @@ __all__ = [
     "IONameVocabTerm",
     "IONameVocabulary",
     "LLMIONameResolver",
-    # Stage: normalize - semantic vocabulary
-    "HeuristicSemanticResolver",
-    "SemanticCandidate",
-    "SemanticResolution",
-    "SemanticResolver",
-    "SemanticVocabTerm",
-    "SemanticVocabulary",
     # Stage: normalize - normalizer
     "SkillRepresentationNormalizer",
     # Stage: write

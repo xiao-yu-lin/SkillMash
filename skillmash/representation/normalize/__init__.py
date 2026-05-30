@@ -19,14 +19,6 @@ from skillmash.representation.normalize.io_name_vocab import (
     IONameVocabulary,
     LLMIONameResolver,
 )
-from skillmash.representation.normalize.semantic_vocab import (
-    HeuristicSemanticResolver,
-    SemanticCandidate,
-    SemanticResolution,
-    SemanticResolver,
-    SemanticVocabTerm,
-    SemanticVocabulary,
-)
 from skillmash.representation.normalize.normalizer import SkillRepresentationNormalizer
 
 __all__ = [
@@ -47,13 +39,6 @@ __all__ = [
     "IONameVocabTerm",
     "IONameVocabulary",
     "LLMIONameResolver",
-    # Semantic vocabulary
-    "HeuristicSemanticResolver",
-    "SemanticCandidate",
-    "SemanticResolution",
-    "SemanticResolver",
-    "SemanticVocabTerm",
-    "SemanticVocabulary",
     # Normalizer
     "SkillRepresentationNormalizer",
 ]

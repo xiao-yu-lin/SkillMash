@@ -180,16 +180,14 @@ flowchart LR
       "type": "text",
       "required": true,
       "description": "Search query or arXiv identifier.",
-      "default": null,
-      "schema_ref": null
+      "default": null
     }
   ],
   "outputs": [
     {
       "name": "paper",
       "type": "pdf",
-      "description": "Downloaded paper PDF.",
-      "schema_ref": null
+      "description": "Downloaded paper PDF."
     }
   ],
   "emits_slots": [],

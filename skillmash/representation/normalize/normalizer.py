@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from threading import RLock
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from skillmash.representation.normalize.base_vocab import term_similarity
 from skillmash.representation.normalize.io_name_vocab import (
@@ -232,7 +232,6 @@ class SkillRepresentationNormalizer:
                     required=True,
                     description="Default text input",
                     default=None,
-                    schema_ref=None,
                 )
             ]
 
@@ -268,7 +267,6 @@ class SkillRepresentationNormalizer:
                     required=bool(data.get("required", True)),
                     description=str(data.get("description") or ""),
                     default=data.get("default"),
-                    schema_ref=data.get("schema_ref"),
                 )
             )
         return self._deduplicate_inputs(inputs, manifest, skill_id, diagnostics)
@@ -325,7 +323,6 @@ class SkillRepresentationNormalizer:
                     name=self.config.default_output_name,
                     type=self.config.unknown_type,
                     description="Unknown output",
-                    schema_ref=None,
                 )
             ]
 
@@ -359,7 +356,6 @@ class SkillRepresentationNormalizer:
                     name=name,
                     type=data_type,
                     description=str(data.get("description") or ""),
-                    schema_ref=data.get("schema_ref"),
                 )
             )
         return self._deduplicate_outputs(outputs, manifest, skill_id, diagnostics)
@@ -446,15 +442,10 @@ class SkillRepresentationNormalizer:
             existing.default,
             incoming.default,
         )
-        schema_ref, schema_ref_conflict = self._merge_optional_value(
-            existing.schema_ref,
-            incoming.schema_ref,
-        )
         details.update(
             {
                 "required_values": [existing.required, incoming.required],
                 "default_conflict": default_conflict,
-                "schema_ref_conflict": schema_ref_conflict,
             }
         )
         return (
@@ -467,7 +458,6 @@ class SkillRepresentationNormalizer:
                     incoming.description,
                 ),
                 default=default,
-                schema_ref=schema_ref,
             ),
             details,
         )
@@ -478,11 +468,6 @@ class SkillRepresentationNormalizer:
         incoming: ArtifactSpec,
     ) -> Tuple[ArtifactSpec, Dict[str, Any]]:
         merged_type, details = self._merge_type(existing.type, incoming.type)
-        schema_ref, schema_ref_conflict = self._merge_optional_value(
-            existing.schema_ref,
-            incoming.schema_ref,
-        )
-        details["schema_ref_conflict"] = schema_ref_conflict
         return (
             ArtifactSpec(
                 name=existing.name,
@@ -491,7 +476,6 @@ class SkillRepresentationNormalizer:
                     existing.description,
                     incoming.description,
                 ),
-                schema_ref=schema_ref,
             ),
             details,
         )

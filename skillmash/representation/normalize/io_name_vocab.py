@@ -18,10 +18,10 @@ from skillmash.representation.normalize.base_vocab import (
     BaseResolution,
     BaseResolver,
     BaseVocabTerm,
+    BaseVocabulary,
     HeuristicBaseResolver,
     _max_vocab_size_from_data,
     _normalize_max_vocab_size,
-    term_similarity,
 )
 from skillmash.common.llm import (
     LLMConfig,
@@ -54,29 +54,15 @@ IONameResolver = BaseResolver
 IONameVocabTerm = BaseVocabTerm
 
 
-class IONameVocabulary:
+class IONameVocabulary(BaseVocabulary):
     """Mutable io_name_vocab with bounded canonical terms and unbounded aliases.
 
     This vocabulary manages I/O name terms used for graph linking.
     """
 
-    def __init__(
-        self,
-        *,
-        version: str,
-        max_vocab_size: Optional[int],
-        terms: Optional[List[IONameVocabTerm]] = None,
-    ) -> None:
-        self.version = version
-        self.max_vocab_size = _normalize_max_vocab_size(max_vocab_size)
-        self._terms: Dict[str, IONameVocabTerm] = {}
-        self._aliases: Dict[str, str] = {}
-        self._lock = RLock()
-        for term in terms or []:
-            self.add_term(term)
-
     @classmethod
     def from_config(cls, config: NormalizationConfig) -> "IONameVocabulary":
+        """Build vocabulary from NormalizationConfig."""
         terms: Dict[str, IONameVocabTerm] = {}
         for alias, name in config.io_name_aliases.items():
             term = terms.setdefault(name, IONameVocabTerm(name=name))
@@ -95,6 +81,7 @@ class IONameVocabulary:
         data: Dict[str, Any],
         config: NormalizationConfig,
     ) -> "IONameVocabulary":
+        """Build vocabulary from a dictionary with config defaults."""
         return cls(
             version=str(data.get("version") or config.io_name_vocab_version),
             max_vocab_size=_max_vocab_size_from_data(
@@ -114,116 +101,9 @@ class IONameVocabulary:
         path: Union[Path, str],
         config: NormalizationConfig,
     ) -> "IONameVocabulary":
+        """Load vocabulary from a JSON file with config defaults."""
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls.from_dict(data, config)
-
-    def save(self, path: Union[Path, str]) -> None:
-        Path(path).write_text(
-            json.dumps(self.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-    def add_term(self, term: IONameVocabTerm) -> None:
-        if not term.name:
-            return
-        with self._lock:
-            self._terms[term.name] = term
-            self._aliases[term.name] = term.name
-            for alias in term.aliases:
-                if alias:
-                    self._aliases[alias] = term.name
-
-    def lookup(self, token: str) -> Optional[str]:
-        with self._lock:
-            return self._aliases.get(token)
-
-    def size(self) -> int:
-        with self._lock:
-            return len(self._terms)
-
-    def is_full(self) -> bool:
-        return self.max_vocab_size is not None and self.size() >= self.max_vocab_size
-
-    def term_names(self) -> List[str]:
-        with self._lock:
-            return sorted(self._terms)
-
-    def add_alias(
-        self,
-        alias: str,
-        target: str,
-        *,
-        example: str = "",
-    ) -> None:
-        with self._lock:
-            term = self._terms.get(target)
-            if term is None:
-                return
-            if alias and alias != target:
-                term.aliases.add(alias)
-                self._aliases[alias] = target
-            if example and example not in term.examples:
-                term.examples.append(example)
-            term.count += 1
-
-    def create_term(
-        self,
-        name: str,
-        *,
-        alias: str = "",
-        example: str = "",
-    ) -> str:
-        with self._lock:
-            if (
-                self.max_vocab_size is not None
-                and name not in self._terms
-                and len(self._terms) >= self.max_vocab_size
-            ):
-                return self.closest_term(name) or name
-            term = self._terms.get(name)
-            if term is None:
-                term = IONameVocabTerm(name=name)
-                self._terms[name] = term
-                self._aliases[name] = name
-            if alias and alias != name:
-                term.aliases.add(alias)
-                self._aliases[alias] = name
-            if example:
-                term.examples.append(example)
-            term.count += 1
-            return name
-
-    def closest_term(self, token: str) -> Optional[str]:
-        with self._lock:
-            if not self._terms:
-                return None
-            return max(
-                self._terms,
-                key=lambda name: term_similarity(token, name),
-            )
-
-    def resolver_context(self) -> Dict[str, Any]:
-        with self._lock:
-            return {
-                "version": self.version,
-                "max_vocab_size": self.max_vocab_size,
-                "is_full": self.is_full(),
-                "terms": [
-                    self._terms[name].to_dict()
-                    for name in sorted(self._terms)
-                ],
-            }
-
-    def to_dict(self) -> Dict[str, Any]:
-        with self._lock:
-            return {
-                "version": self.version,
-                "max_vocab_size": self.max_vocab_size,
-                "terms": [
-                    self._terms[name].to_dict()
-                    for name in sorted(self._terms)
-                ],
-            }
 
 
 class HeuristicIONameResolver(HeuristicBaseResolver):

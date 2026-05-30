@@ -63,7 +63,16 @@ from skillmash.representation import (  # noqa: E402
 
 
 class RichProgress:
-    """Render extraction and vocab resolution progress with Rich."""
+    """Render extraction progress with Rich."""
+
+    # Weight for each stage in overall progress (should sum to 100)
+    STAGE_WEIGHTS = {
+        "parse": 20,
+        "extract": 40,
+        "extract_batch": 40,
+        "normalize": 30,
+        "done": 10,
+    }
 
     def __init__(self, logger: logging.Logger, workers: int) -> None:
         self.logger = logger
@@ -72,7 +81,6 @@ class RichProgress:
         self.console = Console(stderr=True)
         self.progress: Optional[Progress] = None
         self.main_task_id = None
-        self.vocab_task_id = None
         self.lock = threading.Lock()
         self.closed = False
 
@@ -83,7 +91,8 @@ class RichProgress:
         self.done_count = 0
         self.last_stage = "scan"
         self.last_item = ""
-        self.last_vocab = ""
+        self.last_current = 0
+        # Vocab stats (for logging only, no progress bar)
         self.vocab_started = 0
         self.vocab_done = 0
         self.vocab_excluded = 0
@@ -102,6 +111,7 @@ class RichProgress:
             self.total = max(self.total, total)
             self.last_stage = stage
             self.last_item = item
+            self.last_current = current
             if stage == "parse":
                 self.parse_count += 1
             elif stage == "extract":
@@ -116,14 +126,9 @@ class RichProgress:
             if self.progress is not None and self.main_task_id is not None:
                 self.progress.update(
                     self.main_task_id,
-                    completed=self.done_count,
-                    total=max(1, self.total),
+                    completed=self._calculate_weighted_progress(),
+                    total=100,
                     status=self._main_status_line(),
-                )
-            if self.progress is not None and self.vocab_task_id is not None:
-                self.progress.update(
-                    self.vocab_task_id,
-                    status=self._vocab_status_line(),
                 )
 
             if stage == "scan" and total == 0:
@@ -138,6 +143,7 @@ class RichProgress:
         candidate: IONameCandidate,
         resolution: Optional[IONameResolution],
     ) -> None:
+        """Log vocab resolution progress (no progress bar update)."""
         if resolution is None:
             self.logger.info(
                 "stage=vocab_resolve status=start skill_id=%s direction=%s token=%s type=%s",
@@ -162,35 +168,14 @@ class RichProgress:
             )
 
         with self.lock:
-            self._ensure_started(max(1, self.total))
             if resolution is None:
                 self.vocab_started += 1
-                self.last_vocab = (
-                    f"resolving {candidate.skill_id} "
-                    f"{candidate.direction}:{candidate.token}"
-                )
             else:
                 self.vocab_done += 1
                 if resolution.action == "exclude":
                     self.vocab_excluded += 1
                 if resolution.forced_merge:
                     self.vocab_forced_merge += 1
-                confidence = (
-                    f"{float(resolution.confidence):.2f}"
-                    if resolution.confidence is not None
-                    else "n/a"
-                )
-                target = resolution.normalized_value or "excluded"
-                self.last_vocab = (
-                    f"{candidate.skill_id} {candidate.direction}:{candidate.token} "
-                    f"-> {target} ({resolution.action}, conf={confidence})"
-                )
-
-            if self.progress is not None and self.vocab_task_id is not None:
-                self.progress.update(
-                    self.vocab_task_id,
-                    status=self._vocab_status_line(),
-                )
 
     def close(self) -> None:
         with self.lock:
@@ -215,33 +200,35 @@ class RichProgress:
             total=total,
             status=self._main_status_line(),
         )
-        self.vocab_task_id = self.progress.add_task(
-            "IO name vocab",
-            total=1,
-            completed=0,
-            status=self._vocab_status_line(),
-        )
+
+    def _calculate_weighted_progress(self) -> int:
+        """Calculate weighted progress percentage based on stage completion."""
+        if self.total == 0:
+            return 0
+        
+        total = self.total
+        weights = self.STAGE_WEIGHTS
+        
+        # Calculate progress for each stage
+        parse_progress = (min(self.parse_count, total) / total) * weights.get("parse", 0)
+        extract_progress = (min(self.extract_count, total) / total) * weights.get("extract", 0)
+        normalize_progress = (min(self.normalize_count, total) / total) * weights.get("normalize", 0)
+        done_progress = (min(self.done_count, total) / total) * weights.get("done", 0)
+        
+        return int(parse_progress + extract_progress + normalize_progress + done_progress)
 
     def _main_status_line(self) -> str:
+        """Generate single-line status for main progress bar."""
         total = max(1, self.total)
         stage = self._stage_label(self.last_stage)
         item = self._short_item(self.last_item)
+        current = self.last_current
+        
         return (
-            f"stg={stage} item={item} w={self.workers} "
-            f"p={min(self.parse_count, total)}/{total} "
-            f"e={min(self.extract_count, total)}/{total} "
-            f"n={min(self.normalize_count, total)}/{total} "
-            f"d={min(self.done_count, total)}/{total}"
-        )
-
-    def _vocab_status_line(self) -> str:
-        started = max(self.vocab_started, self.vocab_done)
-        detail = self._trim(self.last_vocab, 64) if self.last_vocab else "-"
-        return (
-            f"done={self.vocab_done}/{started} "
-            f"exc={self.vocab_excluded} "
-            f"merge={self.vocab_forced_merge} "
-            f"last={detail}"
+            f"→ [{stage}] {item} ({current}/{total}) | "
+            f"parse {min(self.parse_count, total)}/{total} "
+            f"extract {min(self.extract_count, total)}/{total} "
+            f"normalize {min(self.normalize_count, total)}/{total}"
         )
 
     def _close_locked(self) -> None:
@@ -251,7 +238,6 @@ class RichProgress:
             self.progress.stop()
             self.progress = None
             self.main_task_id = None
-            self.vocab_task_id = None
         elapsed = time.monotonic() - self.started_at
         self.console.log(
             "[representation] progress finished: "
@@ -283,11 +269,6 @@ class RichProgress:
                 return f"{parts[-2]}/{parts[-1]}"
             return parts[-1]
         return item
-
-    def _trim(self, text: str, limit: int) -> str:
-        if len(text) <= limit:
-            return text
-        return f"...{text[-(limit - 3):]}"
 
 
 def main() -> None:

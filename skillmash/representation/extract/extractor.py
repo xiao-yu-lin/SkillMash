@@ -98,7 +98,6 @@ def _parameter_from_payload(payload: Dict[str, Any]) -> ParameterSpec:
         required=bool(payload.get("required", True)),
         description=str(payload.get("description") or ""),
         default=payload.get("default"),
-        schema_ref=payload.get("schema_ref"),
     )
 
 
@@ -107,7 +106,6 @@ def _artifact_from_payload(payload: Dict[str, Any]) -> ArtifactSpec:
         name=str(payload.get("name") or "result"),
         type=_combined_type_from_payload(payload, "unknown"),
         description=str(payload.get("description") or ""),
-        schema_ref=payload.get("schema_ref"),
     )
 
 
@@ -130,8 +128,8 @@ Return JSON only. Do not include markdown.
 
 Required JSON object fields:
 - description: concise string
-- inputs: array of {name, type, required, description, optional schema_ref}
-- outputs: array of {name, type, description, optional schema_ref}
+- inputs: array of {name, type, required, description}
+- outputs: array of {name, type, description}
 - confidence: number between 0 and 1
 - warnings: array of strings
 Optional JSON object fields:

@@ -1,4 +1,4 @@
-﻿# 表征提取模块设计说明书
+# 表征提取模块设计说明书
 
 ## 1. 模块定位
 
@@ -281,16 +281,14 @@ aris-arxiv/
       "type": "text",
       "required": true,
       "description": "Search query or arXiv identifier",
-      "default": null,
-      "schema_ref": null
+      "default": null
     }
   ],
   "outputs": [
     {
       "name": "paper",
       "type": "pdf",
-      "description": "Paper or PDF artifact",
-      "schema_ref": null
+      "description": "Paper or PDF artifact"
     }
   ],
   "preconditions": [],
@@ -388,7 +386,7 @@ DataType =
 
 统一原因：
 
-1. 图构建可以用 `name + type + schema_ref` 判断输入输出是否可连接。
+1. 图构建可以用 `name + type` 判断输入输出是否可连接。
 2. `name` 负责语义角色，`type` 负责传递形态，避免 `type` 和 `format` 重复。
 3. `normalization_decisions.json` 记录名称和类型为什么这样归一化，最终表征保持干净。
 4. 后续扩展到类型层级时，可以统一表达 `pdf -> file`、`pptx -> file` 这类泛化关系。
